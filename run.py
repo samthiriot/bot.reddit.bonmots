@@ -1,6 +1,7 @@
 
 import time
 import random
+import itertools
 
 from datetime import timezone 
 import datetime 
@@ -43,6 +44,8 @@ import spacy
 #nlp = spacy.load("fr_core_news_sm") => no word vectors...
 nlp = spacy.load("fr_core_news_md")
 
+print("\tloaded",len(nlp.vocab.strings),"words, ",len(nlp.vocab.vectors), "vectors")
+
 print("init: loading word frequency")
 import wordfreq
 
@@ -79,6 +82,22 @@ blacklist = set([
                 "crosspost","crossposter",
                 "viméo","vimeo",
                 "Despacito"])
+
+accentspossibles = dict()
+accentspossibles['a'] = ['a','à','ä']
+accentspossibles['e'] = ['e','é','è','ê','ë']
+accentspossibles['i'] = ['i','î','ï','y']
+accentspossibles['o'] = ['o','ô','ö']
+accentspossibles['u'] = ['u','ù','û','ü']
+accentspossibles['y'] = ['y','ÿ','i']
+
+def combinaisons_diacritiques(word):
+    global accentspossibles
+    possibilities = [ accentspossibles.get(letter,[letter]) for letter in word ]
+    for combination in itertools.product(*possibilities):
+        yield ''.join(combination)
+    pass
+
 
 def search_wikipedia(tok, sentences=1):
     try:
@@ -148,10 +167,10 @@ def find_definitions_in_submission(comment):
         if token.is_space or token.is_punct or token.is_stop or not token.is_alpha:
             continue
         # only keep the less frequent words
-        #f = wordfreq.word_frequency(token.lemma_,'fr')
-        #zf = wordfreq.zipf_frequency(token.lemma_,'fr')
-
-        zf = max(wordfreq.zipf_frequency(token.text,'fr'), wordfreq.zipf_frequency(token.lemma_,'fr'))
+        zf = max(
+            max([ wordfreq.zipf_frequency(d,'fr') for d in combinaisons_diacritiques(token.text) ]),
+            max([ wordfreq.zipf_frequency(d,'fr') for d in combinaisons_diacritiques(token.lemma_) ])
+            )    
         if zf >= 1.5: 
             continue
         # ignorons les anglicismes
