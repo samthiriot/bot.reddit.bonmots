@@ -100,7 +100,9 @@ blacklist = set([
                 "downvote","downvoter",
                 "crosspost","crossposter",
                 "viméo","vimeo",
-                "Despacito"])
+                "despacito",
+                "covid","déconfinement","chloroquinine","reconfinement","confinement"
+                ])
 
 accentspossibles = dict()
 accentspossibles['a'] = ['a','à','ä']
@@ -203,7 +205,7 @@ def find_definitions_in_submission(comment):
             continue
         
         stats['words parsed'] = stats['words parsed'] + 1
-        if token.text in blacklist or token.lemma_ in blacklist:
+        if token.text.lower() in blacklist or token.lemma_.lower() in blacklist:
             stats['words rejected blacklist'] = stats['words rejected blacklist'] + 1
             continue
 
