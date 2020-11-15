@@ -74,6 +74,11 @@ print("init: done")
 # TODO introspection, vérifier résultat: mémoriser où on a posté, aller voir de temps en temps (les plus anciens?) messages et mettre à jour les votes
 
 
+stats = dict()
+stats['posts explored'] = 0
+stats['comments parsed'] = 0
+stats['comments parsed'] = 0
+
 cache = dict()
 
 blacklist = set([
@@ -166,6 +171,9 @@ def find_definitions_in_submission(comment):
         # pass most words
         if token.is_space or token.is_punct or token.is_stop or not token.is_alpha:
             continue
+        # pass names
+        if token.tag_ == 'PERSON' or token.tag_.startswith('PROPN'):
+            continue
         # only keep the less frequent words
         zf = max(
             max([ wordfreq.zipf_frequency(d,'fr') for d in combinaisons_diacritiques(token.text) ]),
@@ -179,7 +187,7 @@ def find_definitions_in_submission(comment):
             continue
         # gather information from our corpus
         lexeme = nlp.vocab[token.lemma_]
-        print("\nsearching for ", token.text, ", lemma:", token.lemma_, "has_vector=", lexeme.has_vector, ", vector_norm=", lexeme.vector_norm)
+        print("\nsearching for ", token.text, ", lemma:", token.lemma_, "has_vector=", lexeme.has_vector, ", vector_norm=", lexeme.vector_norm, ", tag=", token.tag_)
 
         nbsearched = nbsearched + 1
         explanation = None
@@ -295,7 +303,9 @@ def parse_comment(comment):
 
 for submission in subreddit.stream.submissions():
 #for submission in subreddit.hot(limit=40):
-    print("THREAD > ", submission.title,'\n')
+    if submission.locked or submission.hidden or submission.quarantine:
+        continue
+    print("THREAD > ", submission.title,'(',submission.num_comments,'comments)\n')
     dt = datetime.datetime.now() 
     utc_time = dt.replace(tzinfo = timezone.utc) 
     utc_timestamp = utc_time.timestamp() 
