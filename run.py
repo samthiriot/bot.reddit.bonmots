@@ -16,6 +16,7 @@ config["readonly"] = True
 
 with open('config-reddit.json') as f:
     config['reddit'] = json.load(f)
+
 print("\tusername:",config['reddit']['username'],"\n\tuser agent:", config['reddit']['user_agent'])
 
 print("init: reddit API")
@@ -34,8 +35,50 @@ reddit = praw.Reddit(
 
 print("init: connecting database")
 import sqlite3
-conn = sqlite3.connect('dictionary.db')
+conn = sqlite3.connect('terms.db')
 c = conn.cursor()
+c.execute('''CREATE TABLE IF NOT EXISTS rejected (word TEXT PRIMARY KEY, reason TEXT)''')
+conn.commit()
+c.execute('''SELECT COUNT(*) FROM rejected''')
+print("\tthere are",c.fetchone()[0],"words blocked in database")
+
+from lru import LRU
+cache_rejected = LRU(10000)
+# fill in the table with entries
+c.execute('''SELECT * FROM rejected ORDER BY RANDOM() LIMIT ?''', (cache_rejected.get_size()/2,))
+for row in c:
+    cache_rejected[row[0]]=row[1]
+print("\tloaded",len(cache_rejected),"items in cache")
+
+def is_word_rejected_db(word):
+    global c
+    global stats
+    global cache_rejected
+    # first try the cache
+    if word in cache_rejected:
+        stats['words rejected db (cache)'] = stats['words rejected db (cache)'] + 1
+        return cache_rejected[word]
+
+    #print("searching db for word",word)
+    stats['words searched db'] = stats['words searched db'] + 1
+    c.execute('SELECT * FROM rejected WHERE word=?', (word,))
+    row = c.fetchone()
+    if row is None:
+        return None    
+    else:
+        reason = row[1]
+        # add to cache
+        cache_rejected[word] = reason
+        print("word ",word," is rejected in db because",reason)
+        return reason
+
+def add_word_rejected_db(word, reason):
+    global c
+    global cache_rejected
+    # add to cache
+    cache_rejected[word] = reason
+    c.execute('INSERT INTO rejected VALUES (?,?)', (word, reason))
+    conn.commit()
 
 print("init: loading spacy french models")
 import spacy
@@ -79,9 +122,13 @@ stats['posts explored'] = 0
 stats['comments parsed'] = 0
 stats['words parsed'] = 0
 stats['words rejected blacklist'] = 0
+stats['words rejected length'] = 0
 stats['words rejected names'] = 0
 stats['words rejected frequency'] = 0
 stats['words rejected exclamation'] = 0
+stats['words searched db'] = 0
+stats['words rejected db'] = 0
+stats['words rejected db (cache)'] = 0
 stats['words searched'] = 0
 stats['words searched wikipedia'] = 0
 stats['words searched wiktionary'] = 0
@@ -89,6 +136,7 @@ stats['words searched Urban Dictionary'] = 0
 stats['words found wikipedia'] = 0
 stats['words found wiktionary'] = 0
 stats['words found Urban Dictionary'] = 0
+stats['words without definition'] = 0
 stats['replies possible'] = 0
 stats['replies posted'] = 0
 stats['ratelimit reddit reply'] = 0
@@ -118,6 +166,8 @@ def combinaisons_diacritiques(word):
     for combination in itertools.product(*possibilities):
         yield ''.join(combination)
     pass
+
+
 
 def zipf_frequency_of_combinaisons_lower_than(word, threshold):
     '''
@@ -205,6 +255,13 @@ def find_definitions_in_submission(comment):
             continue
         
         stats['words parsed'] = stats['words parsed'] + 1
+
+        # length?
+        if len(token.text) < 4:
+            stats['words rejected length'] = stats['words rejected length'] + 1
+            continue
+        
+        # blacklist?
         if token.text.lower() in blacklist or token.lemma_.lower() in blacklist:
             stats['words rejected blacklist'] = stats['words rejected blacklist'] + 1
             continue
@@ -214,24 +271,35 @@ def find_definitions_in_submission(comment):
             continue
         cache[token.text] = 'done'
         
+        # db
+        # TODO: search for what? lemma, text, lower???
+        reason = is_word_rejected_db(token.lemma_)
+        if reason is not None:
+            stats['words rejected db'] = stats['words rejected db'] + 1
+            continue
+
         # pass names
         if token.tag_ == 'PERSON' or token.tag_.startswith('PROPN'):
             stats['words rejected names'] = stats['words rejected names'] + 1
+            add_word_rejected_db(token.lemma_, "word if a Name")
             continue
         
         # only keep the less frequent words
         zf = zipf_frequency_of_combinaisons_lower_than(token.lemma_, 1.5)
         if zf >= 1.5: 
             stats['words rejected frequency'] = stats['words rejected frequency'] + 1
+            add_word_rejected_db(token.lemma_, "zipf frequency > 1.5")
             continue
         zf = max(zf, zipf_frequency_of_combinaisons_lower_than(token.text, 1.5))
         if zf >= 1.5: 
             stats['words rejected frequency'] = stats['words rejected frequency'] + 1
+            add_word_rejected_db(token.lemma_, "zipf frequency > 1.5")
             continue
         # ignorons les anglicismes
         zf_en = max(wordfreq.zipf_frequency(token.text,'en'), wordfreq.zipf_frequency(token.lemma_,'en'))
         if zf_en >= 1.5:
             stats['words rejected frequency'] = stats['words rejected frequency'] + 1
+            add_word_rejected_db(token.lemma_, "en zipf frequency > 1.5")
             continue
         # gather information from our corpus
         lexeme = nlp.vocab[token.lemma_]
@@ -269,6 +337,7 @@ def find_definitions_in_submission(comment):
                         if 'interjection' in d.definition or 'exclamation' in d.definition:
                             blocksearch = True
                             stats['words rejected exclamation'] = stats['words rejected exclamation'] + 1
+                            add_word_rejected_db(token.lemma_, "is interjection or exclamation for Urban Dictionary")
                             break
                         if not d.word.lower().startswith(searched):
                             continue
@@ -320,6 +389,10 @@ def find_definitions_in_submission(comment):
                  stats['replies posted'] = stats['replies posted'] + 1
 
              break # do not search any other term for the same post
+        else:
+            # we found no definition
+            add_word_rejected_db(token.lemma_, "no definition found")
+            stats['words without definition'] = stats['words without definition'] + 1
 
         # do not search too much on one given post
         if nbsearched > 20:

@@ -4,18 +4,7 @@ Un bot reddit qui identifie les jolis mots
 
 # setup 
 
-## tltk
-
-TODO
-
-# others wiktionaryparser
-
-pip3 install wiktionaryparser
-
-
-## wikipedia
-
-   pip install wikipedia 
+pip3 install tltk wiktionaryparser lru-dict wikipedia spacy
 
 
 ## install SpaCy
