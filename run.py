@@ -124,6 +124,8 @@ import wikipedia
 wikipedia.set_lang('fr')
 # TODO shift to https://www.mediawiki.org/wiki/Manual:Pywikibot
 
+wikipedia_blacklisted_categories = set(['informatique','commune','ébauche'])
+
 print("init: wiktionary API")
 from wiktionaryparser import WiktionaryParser
 wiktionary = WiktionaryParser()
@@ -222,7 +224,7 @@ def reddit_results_highter_than(word, threshold):
     global stats
     stats['words searched reddit'] = stats['words searched reddit'] + 1
     print("searching reddit", word)
-    results = subreddit.search(word, syntax='plain')
+    results = subreddit.search(word, syntax='plain', subreddit=None, period=None)
     count = 0;
     for res in results:
         count = count + 1
@@ -238,6 +240,7 @@ blacklisted_wikipedia = ['jeu', 'application', 'marque']
 def search_wikipedia(tok, sentences=1):
     global stats
     global blacklisted_wikipedia
+    global wikipedia_blacklisted_categories
     #found = wikipedia.search("brantes")
     explanation = None
     source = None
@@ -276,20 +279,17 @@ def search_wikipedia(tok, sentences=1):
     # let's load more info about it
     
     # we have a title of a page. Is that word very common?
-    if wordfreq.zipf_frequency(page_info.title,'fr') > 3:
+    if wordfreq.zipf_frequency(page_info.title,'fr') > 3 or wordfreq.zipf_frequency(page_info.title,'en') > 3:
         print("\twikipedia redirected",tok,"to",page_info.title, "which is very frequent")
         add_word_rejected_db(tok, "wikipedia redirects to a frequent word")
         return (True, None, None)
         
-    # TODO filter based on categories?
-    if any('commune' in categorie.lower() for categorie in page_info.categories):
-        print("\nthe wikipedia article ",page_info.title," is about a commune, reject it")
-        return (False, None, None)
+    # filter based on categories?
+    for blacklisted_category in wikipedia_blacklisted_categories:
+        if any(blacklisted_category in categorie.lower() for categorie in page_info.categories):
+            print("\nthe wikipedia article ",page_info.title," is about ',blacklisted_category,', reject it")
+            return (False, None, None)
 
-    if any('ébauche' in categorie for categorie in page_info.categories):
-        print("\nthe wikipedia article ",page_info.title," is an ébauche, reject it")
-        return (False, None, None)
-    
     # load the summary   
     explanation = page_info.summary
     
@@ -407,8 +407,9 @@ def find_definitions_in_submission(comment):
         
         # if we are between parenthesis or brackets then just pass
         if openings_links > 0 and token.is_alpha:
+            # add the words in the link so we don't redefine something defined already
             words_in_urls.add(token.text.lower())
-            print('words linked in urls',words_in_urls)
+            #print('words linked in urls',words_in_urls)
             continue
 
         # do not search in quotes
