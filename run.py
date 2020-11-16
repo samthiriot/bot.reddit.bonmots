@@ -80,17 +80,41 @@ def add_word_rejected_db(word, reason):
     global cache_rejected
     # add to cache
     cache_rejected[word] = reason
-    c.execute('INSERT INTO rejected VALUES (?,?)', (word, reason))
-    conn.commit()
+    try:
+        c.execute('INSERT INTO rejected VALUES (?,?)', (word, reason))
+        conn.commit()
+    except sqlite3.IntegrityError as e:
+        print(e)
+        pass
 
 print("init: loading spacy french models")
 import spacy
 # https://spacy.io/models/fr
 #nlp = spacy.load("fr")
 #nlp = spacy.load("fr_core_news_sm") => no word vectors...
-nlp = spacy.load("fr_core_news_md")
+nlp = spacy.load("fr_core_news_md")     # this model is big enough to have vectors
 
 print("\tloaded",len(nlp.vocab.strings),"words, ",len(nlp.vocab.vectors), "vectors")
+
+# install custom tokenizer
+from spacy.tokenizer import Tokenizer
+
+def custom_tokenizer(nlp):
+    special_cases = {":)": [{"ORTH": ":)"}]}
+    prefix_re = re.compile(r'''^[[("']''')
+    suffix_re = re.compile(r'''[])"']$''')
+    infix_re = re.compile(r'''[~\(\]/]''')
+    simple_url_re = re.compile(r'''^https?://''')
+    return Tokenizer(nlp.vocab, rules=special_cases,
+                                prefix_search=prefix_re.search,
+                                suffix_search=suffix_re.search,
+                                infix_finditer=infix_re.finditer,
+                                url_match=simple_url_re.match)
+
+nlp.tokenizer = custom_tokenizer(nlp)
+print("\tinstalled custom tokenizer")
+#doc = nlp("voici un exemple de texte avec [un lien sur un mot compliqué](http://google.fr/complique) pour lequel le mot compliqué devrait être identifié. Oui, sans doute, pas peut-être !")
+#print([t.text for t in doc]) # ['hello', '-', 'world.', ':)']
 
 print("init: loading word frequency")
 import wordfreq
@@ -125,6 +149,7 @@ stats['posts explored'] = 0
 stats['comments parsed'] = 0
 stats['words parsed'] = 0
 stats['words rejected blacklist'] = 0
+stats['words rejected linked'] = 0          # how many words were rejected because they were explained in a weblink already?
 stats['words searched db'] = 0
 stats['words rejected length'] = 0
 stats['words rejected names'] = 0
@@ -151,6 +176,7 @@ blacklist = set([
                 "upvote","upvoter",
                 "downvote","downvoter",
                 "crosspost","crossposter",
+                'flood','flooder',
                 "viméo","vimeo",
                 "despacito",
                 "covid","déconfinement","chloroquinine","reconfinement","confinement"
@@ -215,10 +241,12 @@ def search_wikipedia(tok, sentences=1):
     #found = wikipedia.search("brantes")
     explanation = None
     source = None
+    page_info = None
     try:
         print("searching wikipedia for ", tok)
         stats['words searched wikipedia'] = stats['words searched wikipedia'] + 1
-        explanation = wikipedia.summary(tok, sentences=sentences, auto_suggest=False, redirect=True)
+        # load the page
+        page_info = wikipedia.page(tok, auto_suggest=False, redirect=True) # TODO auto_suggest?
     except wikipedia.exceptions.DisambiguationError as e:
         # il y a plus solutions
         # TODO le plus intelligent serait de trouver la définition la plus pertinente d'après la proximité lexico
@@ -230,34 +258,56 @@ def search_wikipedia(tok, sentences=1):
                 continue
             # certaines solutions mènent à des erreurs; on boucle et on prend la première solution qui ne plante pas
             try:
-                explanation = wikipedia.summary(option, sentences=1, auto_suggest=False, redirect=True)
+                page_info = wikipedia.page(option, auto_suggest=False, redirect=True)
                 tok = option
                 break
             except:
                 pass
     except:
         pass
-
+    
     # we searched for definitions
-    if explanation is None:
+    if page_info is None:
         # we did not found any definition...
         # TODO add to a Wikipedia cache so we don't query it again and again
         return (False, None, None)
+    
+    # so we found a page which seems of interest.
+    # let's load more info about it
+    
+    # we have a title of a page. Is that word very common?
+    if wordfreq.zipf_frequency(page_info.title,'fr') > 3:
+        print("\twikipedia redirected",tok,"to",page_info.title, "which is very frequent")
+        add_word_rejected_db(tok, "wikipedia redirects to a frequent word")
+        return (True, None, None)
+        
+    # TODO filter based on categories?
+    if any('commune' in categorie.lower() for categorie in page_info.categories):
+        print("\nthe wikipedia article ",page_info.title," is about a commune, reject it")
+        return (False, None, None)
 
+    if any('ébauche' in categorie for categorie in page_info.categories):
+        print("\nthe wikipedia article ",page_info.title," is an ébauche, reject it")
+        return (False, None, None)
+    
+    # load the summary   
+    explanation = page_info.summary
+    
+    source = '[Wikipedia](https://fr.wikipedia.org/wiki/'+quote(page_info.title)+')'
+    
     # so we found a definition
     # a too short explanation might require more sentences
     if len(explanation) < 20:
         return search_wikipedia(tok, sentences=sentences+1)
-
+    
     # do not accept several specific words
     if any(blacklisted_word in explanation.lower() for blacklisted_word in blacklisted_wikipedia):
         print("\n\n!!! rejected word",tok,"in wikipedia because it matches a blacklisted concept\n\n")
         stats['words rejected wikipedia'] = stats['words rejected wikipedia'] + 1
         add_word_rejected_db(tok, "blacklisted concept in wikipedia")
         return (True, None, None)
-
+    
     # we accept this definition and return it
-    source = '[Wikipedia](https://fr.wikipedia.org/wiki/'+quote(tok)+')'
     stats['words found wikipedia'] = stats['words found wikipedia'] + 1
     return (False, explanation, source)
 
@@ -330,10 +380,49 @@ def find_definitions_in_submission(comment):
     body = comment.body
     # tokenisation: split the string into tokens
     nbsearched = 0
+    openings = 0
+    openings_links = 0
+    inquote = False
+    url_count = 0
     doc = nlp(body)
+    words_in_urls = set()
     for token in doc:
+        #print(token.text)
+        # avoid providing definitions when there were links in the 
+        if token.like_url:
+           url_count = url_count + 1
+        # do not search in the web links 
+        if token.is_punct:
+            # do detect links & parenthesis
+            if token.text in ['(','[']:
+                openings = openings + 1
+            elif token.text in [')',']']:
+                openings = openings - 1
+            if token.text == '[':
+                openings_links = openings_links + 1
+                #print("=> open link !")
+            elif token.text == ']':
+                openings_links = openings_links - 1
+                #print("=> close link !")
+        
+        # if we are between parenthesis or brackets then just pass
+        if openings_links > 0 and token.is_alpha:
+            words_in_urls.add(token.text.lower())
+            print('words linked in urls',words_in_urls)
+            continue
+
+        # do not search in quotes
+        if token.is_sent_start:
+            if token.text == '>':
+                inquote = True
+                #print('start of a quote block!')
+            elif inquote:
+                inquote = False
+                #print('end of a quote block!')
+        if inquote:
+            continue
         # pass what is not words
-        if token.is_space or token.is_punct or token.is_stop or not token.is_alpha:
+        if token.is_space or token.is_punct or token.is_stop or not token.is_alpha or token.like_url:
             continue
         
         stats['words parsed'] = stats['words parsed'] + 1
@@ -348,6 +437,10 @@ def find_definitions_in_submission(comment):
             stats['words rejected blacklist'] = stats['words rejected blacklist'] + 1
             continue
         
+        # was it explained already?
+        if token.text.lower() in words_in_urls:
+            stats['words rejected linked'] = stats['words rejected linked'] + 1
+            continue
         # db
         # TODO: search for what? lemma, text, lower???
         reason = is_word_rejected_db(token.lemma_)
@@ -413,7 +506,11 @@ def find_definitions_in_submission(comment):
         if explanation is not None:
              print('_________________________________________________________\n\n', body, '\n\n---------------------------------------\n\n')
              qualif = random.choice(['très rare','peu connu']) if lexeme.vector_norm == 0 else random.choice(['plutôt rare','assez rare','peu courant','inusité'])
-             txt = '*'+token.text+'* est un mot '+qualif+' en Français ! J\'en ai '+random.choice(['trouvé','déniché'])+' une définition sur '+source+':\n\n'+explanation
+             txt = ''
+             if len(body) > len(token.sent.text)*2:
+                # this is a long message, let's quote the sentence
+                txt = txt + '> '+token.sent.text+'\n\n'
+             txt = txt + '*'+token.text+'* est un mot '+qualif+' en Français ! J\'en ai '+random.choice(['trouvé','déniché'])+' une définition sur '+source+':\n\n'+explanation
              print(txt,'\n\n')
              stats['replies possible'] = stats['replies possible'] + 1 
              if not config["readonly"]:
@@ -447,7 +544,7 @@ def find_definitions_in_submission(comment):
                  stats['replies posted'] = stats['replies posted'] + 1
 
              break # do not search any other term for the same post
-        else:
+        elif not blocksearch:
             # we found no definition
             add_word_rejected_db(token.lemma_, "no definition found")
             stats['words without definition'] = stats['words without definition'] + 1
@@ -466,6 +563,8 @@ def parse_comment(comment):
     global utc_timestamp
     global myusername
     global stats
+    if isinstance(comment, MoreComments):
+        return
     # skip if moderated
     if comment.locked or comment.archived or comment.collapsed or (comment.banned_by is not None):
         return
@@ -492,7 +591,7 @@ def parse_comment(comment):
 
 #for submission in subreddit.stream.submissions():
 for submission in subreddit.hot(limit=40):
-    if submission.locked or submission.hidden or submission.quarantine:
+    if submission.locked or submission.hidden or submission.quarantine or submission.num_comments==0:
         continue
     print("THREAD > ", submission.title,'(',submission.num_comments,'comments)\n')
     dt = datetime.datetime.now() 
