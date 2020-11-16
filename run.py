@@ -35,6 +35,7 @@ reddit = praw.Reddit(
     password=config['reddit']['password'] #"***REMOVED***"
 )
 subreddit = reddit.subreddit("france")
+allreddit = reddit.subreddit("all")
 
 print("init: connecting database")
 import sqlite3
@@ -191,6 +192,7 @@ accentspossibles['i'] = ['i','î','ï','y']
 accentspossibles['o'] = ['o','ô','ö']
 accentspossibles['u'] = ['u','ù','û','ü']
 accentspossibles['y'] = ['y','ÿ','i']
+accentspossibles['c'] = ['c','ç']
 
 def combinaisons_diacritiques(word):
     global accentspossibles
@@ -199,6 +201,33 @@ def combinaisons_diacritiques(word):
         yield ''.join(combination)
     pass
 
+consonnes_multiples = dict()
+consonnes_multiples['n'] = ['n','nn']
+consonnes_multiples['nn'] = ['nn','n']
+consonnes_multiples['r'] = ['r','rr']
+consonnes_multiples['rr'] = ['rr','r']
+
+consonnes_doublables = set(['n','r'])
+
+def combinaisons_consonnes(word):
+    global consonnes_doublables
+    
+    w = word.lower()
+    dic = dict()
+    for letter in consonnes_doublables:
+        w = w.replace(letter+letter,letter)
+        dic[letter] = [letter, letter+letter]
+    
+    possibilities = [ dic.get(letter,[letter]) for letter in w[:-1] ]
+    
+    for combination in itertools.product(*possibilities):
+        yield ''.join(combination) + w[-1:]
+    
+    pass
+
+
+list(combinaisons_consonnes("maronnier"))
+
 
 def zipf_frequency_of_combinaisons_lower_than(word, threshold):
     '''
@@ -206,7 +235,7 @@ def zipf_frequency_of_combinaisons_lower_than(word, threshold):
     or the highest zipf frequency
     '''
     _max = 0
-    for d in combinaisons_diacritiques(word):
+    for d in combinaisons_diacritiques(combinaisons_consonnes(word.lower())):
         f = wordfreq.zipf_frequency(d,'fr')
         if f >= threshold:
             return f
@@ -221,10 +250,11 @@ def reddit_results_highter_than(word, threshold):
     of the count of answers
     '''
     global subreddit
+    global allreddit
     global stats
     stats['words searched reddit'] = stats['words searched reddit'] + 1
     print("searching reddit", word)
-    results = subreddit.search(word, syntax='plain', subreddit=None, period=None)
+    results = allreddit.search(word, syntax='plain') # TODO search french first?
     count = 0;
     for res in results:
         count = count + 1
@@ -591,7 +621,7 @@ def parse_comment(comment):
 
 
 #for submission in subreddit.stream.submissions():
-for submission in subreddit.hot(limit=40):
+for submission in subreddit.hot(limit=100):
     if submission.locked or submission.hidden or submission.quarantine or submission.num_comments==0:
         continue
     print("THREAD > ", submission.title,'(',submission.num_comments,'comments)\n')
