@@ -14,12 +14,16 @@ from urllib.parse import quote_plus
 print("init: reading parameters")
 import json
 config = dict()
-config['readonly'] = True
+config['readonly'] = False
 
 with open('config-reddit.json') as f:
     config['reddit'] = json.load(f)
 
 print("\tusername:",config['reddit']['username'],"\n\tuser agent:", config['reddit']['user_agent'])
+
+if not config['readonly']:
+    print("\tWARNING, we are not read-only, we will post messages!")
+
 
 print("init: reddit API")
 import praw
@@ -541,7 +545,9 @@ def find_definitions_in_submission(comment):
              if len(body) > len(token.sent.text)*2:
                 # this is a long message, let's quote the sentence
                 txt = txt + '> '+token.sent.text+'\n\n'
-             txt = txt + '*'+token.text+'* est un mot '+qualif+' en Français ! J\'en ai '+random.choice(['trouvé','déniché'])+' une définition sur '+source+':\n\n'+explanation
+             txt = txt + '*'+token.text+'* est un mot '+qualif+' en Français ! J\'en ai '+random.choice(['trouvé','déniché'])+' une définition sur '+source+':\n\n'
+             txt = txt + explanation + '\n\n'
+             txt = txt + '(je suis [un bot](https://github.com/***REMOVED***/bot.reddit.bonmots) bienveillant mais en apprentissage; répondez-moi si je me trompe, mon développeur surveille les messages)'
              print(txt,'\n\n')
              stats['replies possible'] = stats['replies possible'] + 1 
              if not config["readonly"]:
@@ -574,7 +580,7 @@ def find_definitions_in_submission(comment):
                             break
                  stats['replies posted'] = stats['replies posted'] + 1
 
-             break # do not search any other term for the same post
+             return True # break and stop searching
         elif not blocksearch:
             # we found no definition
             add_word_rejected_db(token.lemma_, "no definition found")
@@ -584,6 +590,8 @@ def find_definitions_in_submission(comment):
         if nbsearched > 20:
              break
 
+    # we did not commented anything
+    return False
 
 
 dt = datetime.datetime.now() 
@@ -610,18 +618,23 @@ def parse_comment(comment):
         # we probably worked on it already!
         return
     else:
-        find_definitions_in_submission(comment)
         stats['comments parsed'] = stats['comments parsed'] + 1
-
+        if find_definitions_in_submission(comment):
+            return True
+        
     # now explore the subcomments!
     for reply in comment.replies:    
         if isinstance(reply, MoreComments):
             continue
-        parse_comment(reply)
+        if parse_comment(reply):
+            return True
+    # we did not commented
+    return False
 
 
-#for submission in subreddit.stream.submissions():
-for submission in subreddit.hot(limit=100):
+i = 0
+for submission in subreddit.stream.submissions():
+#for submission in subreddit.hot(limit=100):
     if submission.locked or submission.hidden or submission.quarantine or submission.num_comments==0:
         continue
     print("THREAD > ", submission.title,'(',submission.num_comments,'comments)\n')
@@ -629,9 +642,12 @@ for submission in subreddit.hot(limit=100):
     utc_time = dt.replace(tzinfo = timezone.utc) 
     utc_timestamp = utc_time.timestamp() 
     for comment in submission.comments:
-        parse_comment(comment)
+        if parse_comment(comment):
+            break
+    i = i + 1
+    if i%50 == 0:
+        print('\n',stats,'\n')
     stats['posts explored'] = stats['posts explored'] + 1
-    print('\n',stats,'\n')
-
+   
 
 
