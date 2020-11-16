@@ -3,6 +3,8 @@ import time
 import random
 import itertools
 
+import re
+
 from datetime import timezone 
 import datetime 
 
@@ -12,7 +14,7 @@ from urllib.parse import quote_plus
 print("init: reading parameters")
 import json
 config = dict()
-config["readonly"] = True
+config['readonly'] = True
 
 with open('config-reddit.json') as f:
     config['reddit'] = json.load(f)
@@ -32,6 +34,7 @@ reddit = praw.Reddit(
     username=config['reddit']['username'], #"***REMOVED***",
     password=config['reddit']['password'] #"***REMOVED***"
 )
+subreddit = reddit.subreddit("france")
 
 print("init: connecting database")
 import sqlite3
@@ -45,7 +48,7 @@ print("\tthere are",c.fetchone()[0],"words blocked in database")
 from lru import LRU
 cache_rejected = LRU(10000)
 # fill in the table with entries
-c.execute('''SELECT * FROM rejected ORDER BY RANDOM() LIMIT ?''', (cache_rejected.get_size()/2,))
+c.execute('''SELECT * FROM rejected ORDER BY RANDOM() LIMIT ?''', (int(cache_rejected.get_size()*2/3),))
 for row in c:
     cache_rejected[row[0]]=row[1]
 print("\tloaded",len(cache_rejected),"items in cache")
@@ -69,7 +72,7 @@ def is_word_rejected_db(word):
         reason = row[1]
         # add to cache
         cache_rejected[word] = reason
-        print("word ",word," is rejected in db because",reason)
+        #print("word ",word," is rejected in db because",reason)
         return reason
 
 def add_word_rejected_db(word, reason):
@@ -122,15 +125,18 @@ stats['posts explored'] = 0
 stats['comments parsed'] = 0
 stats['words parsed'] = 0
 stats['words rejected blacklist'] = 0
+stats['words searched db'] = 0
 stats['words rejected length'] = 0
 stats['words rejected names'] = 0
 stats['words rejected frequency'] = 0
 stats['words rejected exclamation'] = 0
-stats['words searched db'] = 0
+stats['words searched reddit'] = 0
+stats['words rejected reddit'] = 0
 stats['words rejected db'] = 0
 stats['words rejected db (cache)'] = 0
 stats['words searched'] = 0
 stats['words searched wikipedia'] = 0
+stats['words rejected wikipedia'] = 0
 stats['words searched wiktionary'] = 0
 stats['words searched Urban Dictionary'] = 0
 stats['words found wikipedia'] = 0
@@ -140,8 +146,6 @@ stats['words without definition'] = 0
 stats['replies possible'] = 0
 stats['replies posted'] = 0
 stats['ratelimit reddit reply'] = 0
-
-cache = dict()
 
 blacklist = set([
                 "upvote","upvoter",
@@ -168,7 +172,6 @@ def combinaisons_diacritiques(word):
     pass
 
 
-
 def zipf_frequency_of_combinaisons_lower_than(word, threshold):
     '''
     returns the first value having a zipf frequency exceeding the threshold,
@@ -184,35 +187,79 @@ def zipf_frequency_of_combinaisons_lower_than(word, threshold):
     return _max
 
 
+def reddit_results_highter_than(word, threshold):
+    '''
+    returns the threshold if there are that many answers in reddit,
+    of the count of answers
+    '''
+    global subreddit
+    global stats
+    stats['words searched reddit'] = stats['words searched reddit'] + 1
+    print("searching reddit", word)
+    results = subreddit.search(word, syntax='plain')
+    count = 0;
+    for res in results:
+        count = count + 1
+        if count >= threshold:
+            print("term",word,"found more than",threshold,"times")
+            return threshold
+    print("term",word,"found ",count,"times")
+    return count
+
+
+blacklisted_wikipedia = ['jeu', 'application', 'marque']
+
 def search_wikipedia(tok, sentences=1):
     global stats
+    global blacklisted_wikipedia
+    #found = wikipedia.search("brantes")
+    explanation = None
+    source = None
     try:
         print("searching wikipedia for ", tok)
+        stats['words searched wikipedia'] = stats['words searched wikipedia'] + 1
         explanation = wikipedia.summary(tok, sentences=sentences, auto_suggest=False, redirect=True)
-        # a too short explanation might require more sentences
-        if len(explanation) < 20:
-            return search_wikipedia(tok, sentences=sentences+1)
-        source = '[Wikipedia](https://fr.wikipedia.org/wiki/'+quote(tok)+')'
-        stats['words found wikipedia'] = stats['words found wikipedia'] + 1
-        return (explanation, source)
     except wikipedia.exceptions.DisambiguationError as e:
         # il y a plus solutions
         # TODO le plus intelligent serait de trouver la définition la plus pertinente d'après la proximité lexico
         # prenons déjà la première
         options = [ s for s in e.options if s != tok and len(s)>0]
-        print('\tWikipedia en propose les définitions suivantes: ', e.options, 'et donc',options[0],'\n\n')
+        print('\tWikipedia en propose les définitions suivantes: ', e.options, 'et donc la première:',options[0],'\n\n')
         for option in options:
+            if len(option) < 3: 
+                continue
             # certaines solutions mènent à des erreurs; on boucle et on prend la première solution qui ne plante pas
             try:
                 explanation = wikipedia.summary(option, sentences=1, auto_suggest=False, redirect=True)
-                source = '[Wikipedia](https://fr.wikipedia.org/wiki/'+quote(option)+')'
-                stats['words found wikipedia'] = stats['words found wikipedia'] + 1
-                return (explanation, source)
+                tok = option
+                break
             except:
                 pass
     except:
         pass
-    return (None, None)
+
+    # we searched for definitions
+    if explanation is None:
+        # we did not found any definition...
+        # TODO add to a Wikipedia cache so we don't query it again and again
+        return (False, None, None)
+
+    # so we found a definition
+    # a too short explanation might require more sentences
+    if len(explanation) < 20:
+        return search_wikipedia(tok, sentences=sentences+1)
+
+    # do not accept several specific words
+    if any(blacklisted_word in explanation.lower() for blacklisted_word in blacklisted_wikipedia):
+        print("\n\n!!! rejected word",tok,"in wikipedia because it matches a blacklisted concept\n\n")
+        stats['words rejected wikipedia'] = stats['words rejected wikipedia'] + 1
+        add_word_rejected_db(tok, "blacklisted concept in wikipedia")
+        return (True, None, None)
+
+    # we accept this definition and return it
+    source = '[Wikipedia](https://fr.wikipedia.org/wiki/'+quote(tok)+')'
+    stats['words found wikipedia'] = stats['words found wikipedia'] + 1
+    return (False, explanation, source)
 
 
 def search_wiktionary(searched):
@@ -233,12 +280,47 @@ def search_wiktionary(searched):
             source = 'Wiktionary'
             stats['words found wiktionary'] = stats['words found wiktionary'] + 1
             print(defs)
-            return (explanation, source)
+            return (False, explanation, source)
         break
-    return (None, None)
+    return (False, None, None)
+
+
+def search_urban_dictionary(token):
+    global stats
+    print("searching Urban Dictionary for ",token.lemma_)
+    stats['words searched Urban Dictionary'] = stats['words searched Urban Dictionary'] + 1
+    try:
+        blocksearch = False
+        searched = token.lemma_.lower()
+        defs = urbandictionary.define(searched)
+        if len(defs)> 0 :
+            best = defs[0] 
+            for d in defs:
+                if 'interjection' in d.definition or 'exclamation' in d.definition:
+                    # Urban Dictionary has at least one definition saying this is an exclamation or interjection. We reject the word on this basis
+                    blocksearch = True
+                    stats['words rejected exclamation'] = stats['words rejected exclamation'] + 1
+                    add_word_rejected_db(token.lemma_, "is interjection or exclamation for Urban Dictionary")
+                    return (True, None, None)
+                if not d.word.lower().startswith(searched):
+                    # this proposal is not 
+                    continue
+                print(d)
+                if (d.upvotes - d.downvotes) > (best.upvotes - best.downvotes):
+                    best = d
+            if not blocksearch and best.word.lower().startswith(searched) and best.upvotes - best.downvotes > 20 and best.upvotes > 100: # enough votes for interest 
+                pattern = re.compile('(.*)\[([\w]+)\](.*)')
+                definition = pattern.sub('\\1[\\2](https://www.urbandictionary.com/define.php?term=\\2)\\3', best.definition)
+                explanation = best.word + ': ' + definition # best.example
+                source = '[Urban Dictionary](https://www.urbandictionary.com/define.php?term='+quote(best.word)+')'
+                stats['words found Urban Dictionary'] = stats['words found Urban Dictionary'] + 1
+                return (False, explanation, source) 
+    except KeyError as e:
+        print("error with Urban Dictionary", e)
+    return (False, None, None)
+
 
 def find_definitions_in_submission(comment):
-    global cache
     global wiktionary
     global c
     global blacklist
@@ -265,11 +347,6 @@ def find_definitions_in_submission(comment):
         if token.text.lower() in blacklist or token.lemma_.lower() in blacklist:
             stats['words rejected blacklist'] = stats['words rejected blacklist'] + 1
             continue
-
-        # TODO cache
-        if token.text in cache:
-            continue
-        cache[token.text] = 'done'
         
         # db
         # TODO: search for what? lemma, text, lower???
@@ -281,7 +358,7 @@ def find_definitions_in_submission(comment):
         # pass names
         if token.tag_ == 'PERSON' or token.tag_.startswith('PROPN'):
             stats['words rejected names'] = stats['words rejected names'] + 1
-            add_word_rejected_db(token.lemma_, "word if a Name")
+            add_word_rejected_db(token.lemma_, "word is a Name")
             continue
         
         # only keep the less frequent words
@@ -301,6 +378,14 @@ def find_definitions_in_submission(comment):
             stats['words rejected frequency'] = stats['words rejected frequency'] + 1
             add_word_rejected_db(token.lemma_, "en zipf frequency > 1.5")
             continue
+        
+        # ignorons les termes fréquents sur reddit
+        count_reddit = reddit_results_highter_than(token.lemma_, 10)
+        if count_reddit >= 5:
+            stats['words rejected reddit'] = stats['words rejected reddit'] + 1
+            add_word_rejected_db(token.lemma_, "more than 10 reddit results")
+            continue
+        
         # gather information from our corpus
         lexeme = nlp.vocab[token.lemma_]
         print("\nsearching for ", token.text, ", lemma:", token.lemma_, "has_vector=", lexeme.has_vector, ", vector_norm=", lexeme.vector_norm, ", tag=", token.tag_)
@@ -311,46 +396,19 @@ def find_definitions_in_submission(comment):
         blocksearch = False # if true, stop searching for it because we have a good reason to think it is bad
 
         # search Wikipedia for the token
-        (explanation, source) = search_wikipedia(token.text)
+        (blocksearch, explanation, source) = search_wikipedia(token.text)
         if not blocksearch and explanation is None and token.text.lower() != token.lemma_.lower():
-            (explanation, source) = search_wikipedia(token.lemma_)
-            stats['words searched wikipedia'] = stats['words searched wikipedia'] + 1
+            (blocksearch, explanation, source) = search_wikipedia(token.lemma_)
 
         # search Wiktionary
         # TODO réactiver - peut être
         #if not blocksearch and explanation is None:
-        #    (explanation, source) = search_wiktionary(token.lemma_)
+        #    (blocksearch, explanation, source) = search_wiktionary(token.lemma_)
         #    stats['words searched wiktionary'] = stats['words searched wiktionary'] + 1
 
         # search Urban Dictionary
-        # TODO isolate
-        # TODO make all the isolated search return blocksearch
         if not blocksearch and explanation is None:
-            print("searching Urban Dictionary for ",token.lemma_)
-            stats['words searched Urban Dictionary'] = stats['words searched Urban Dictionary'] + 1
-            try:
-                searched = token.lemma_.lower()
-                defs = urbandictionary.define(searched)
-                if len(defs)> 0 :
-                    best = defs[0] 
-                    for d in defs:
-                        if 'interjection' in d.definition or 'exclamation' in d.definition:
-                            blocksearch = True
-                            stats['words rejected exclamation'] = stats['words rejected exclamation'] + 1
-                            add_word_rejected_db(token.lemma_, "is interjection or exclamation for Urban Dictionary")
-                            break
-                        if not d.word.lower().startswith(searched):
-                            continue
-                        print(d)
-                        if (d.upvotes - d.downvotes) > (best.upvotes - best.downvotes):
-                            best = d
-                    if not blocksearch and best.word.lower().startswith(searched) and best.upvotes - best.downvotes > 20: # enough votes for interest 
-                        explanation = best.word + ':' + best.definition # best.example
-                        source = 'Urban Dictionary'
-                        stats['words found Urban Dictionary'] = stats['words found Urban Dictionary'] + 1
-            except KeyError as e:
-                print("error with Urban Dictionary", e)
-                
+            (blocksearch, explanation, source) = search_urban_dictionary(token)
         
         if explanation is not None:
              print('_________________________________________________________\n\n', body, '\n\n---------------------------------------\n\n')
@@ -398,7 +456,7 @@ def find_definitions_in_submission(comment):
         if nbsearched > 20:
              break
 
-subreddit = reddit.subreddit("france")
+
 
 dt = datetime.datetime.now() 
 utc_time = dt.replace(tzinfo = timezone.utc) 
@@ -432,8 +490,8 @@ def parse_comment(comment):
         parse_comment(reply)
 
 
-for submission in subreddit.stream.submissions():
-#for submission in subreddit.hot(limit=40):
+#for submission in subreddit.stream.submissions():
+for submission in subreddit.hot(limit=40):
     if submission.locked or submission.hidden or submission.quarantine:
         continue
     print("THREAD > ", submission.title,'(',submission.num_comments,'comments)\n')
