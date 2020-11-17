@@ -33,22 +33,27 @@ print("init: connecting reddit")
 myusername = config['reddit']['username']
 reddit = praw.Reddit(
     user_agent=config['reddit']['user_agent'],
-    client_id=config['reddit']['client_id'], #"-IiKLzm4x62h3w",
-    client_secret=config['reddit']['client_secret'], #"pxBe1QxxjuM_MmTYTJfRPC3fMOCDyw",
-    username=config['reddit']['username'], #"***REMOVED***",
-    password=config['reddit']['password'] #"***REMOVED***"
+    client_id=config['reddit']['client_id'], 
+    client_secret=config['reddit']['client_secret'], 
+    username=config['reddit']['username'], 
+    password=config['reddit']['password'] 
 )
+# the subreddit we will monitor and reply to
 subreddit = reddit.subreddit("france")
-allreddit = reddit.subreddit("all")
-myprofile = reddit.redditor("bot-mots-rares")
+print('\twill monitor comments of reddits: ',subreddit.display_name)
+# the subreddit we use to know if a term is frequent or not
+allreddit = reddit.subreddit("france+news+europe")
+print('\twill assess the popularity of terms using reddits: ',allreddit.display_name)
+# our username
+myprofile = reddit.redditor(config['reddit']['username'])
 if myprofile.is_suspended:
     print('\toops, seems like my account is suspended o_O')
     quit()
 if not myprofile.verified:
     print('\toops, seems like by profile is not verified')
 
-print('\tcomment-karma:\t',myprofile.comment_karma,'\t:-(' if myprofile.comment_karma < 0 else '\t:-)')
-print('\ttotal karma:\t',myprofile.total_karma,'\t:-(' if myprofile.total_karma < 0 else '\t:-)')
+print('\tcomment-karma:\t', myprofile.comment_karma,    '\t:-(' if myprofile.comment_karma < 0 else '\t:-)')
+print('\ttotal karma:\t',   myprofile.total_karma,      '\t:-(' if myprofile.total_karma < 0 else '\t:-)')
 
 print("init: connecting terms database")
 
@@ -59,6 +64,9 @@ c.execute('''CREATE TABLE IF NOT EXISTS rejected (word TEXT PRIMARY KEY, reason 
 conn.commit()
 c.execute('''SELECT COUNT(*) FROM rejected''')
 print("\tthere are",c.fetchone()[0],"words blocked in database")
+c.execute('''SELECT reason, COUNT(*) FROM rejected GROUP BY reason''')
+for row in c.fetchall():
+    print('\t\t',row[0],':\t',row[1])
 
 from lru import LRU
 cache_rejected = LRU(10000)
@@ -167,6 +175,13 @@ wikipedia_blacklisted_categories = set(['informatique','commune','ébauche'])
 
 print("init: urban dictionary")
 import urbandictionary
+urban_dictionnary_available = True
+try:
+    urbandictionary.define('amazing')
+    print('\turban dictionary up and alive :-)')
+except:
+    print('\tunable to reach urban dictionary, we will continue without it :-/')
+    urban_dictionnary_available = False
 
 print("init: done\n\n")
 
@@ -219,6 +234,8 @@ blacklist = set([
 accentspossibles = dict()
 accentspossibles['a'] = ['a','à','ä']
 accentspossibles['e'] = ['e','é','è','ê','ë']
+accentspossibles['è'] = ['è','é','e','ê']
+accentspossibles['é'] = ['é','è','e','ê']
 accentspossibles['i'] = ['i','î','ï','y']
 accentspossibles['o'] = ['o','ô','ö']
 accentspossibles['u'] = ['u','ù','û','ü']
@@ -260,14 +277,16 @@ def zipf_frequency_of_combinaisons_lower_than(word, threshold):
     or the highest zipf frequency
     '''
     _max = 0
+    print('\nzipf frequency of ',word,'?') #élèment            
     for d1 in combinaisons_consonnes(word.lower()):
         for d in combinaisons_diacritiques(d1): 
-            #print('zipf frequency of ',d)
+            print(d, end=' ')
             f = wordfreq.zipf_frequency(d,'fr')
             if f >= threshold:
                 return f
             if f > _max:
                 _max = f
+    print()
     return _max
 
 
@@ -418,6 +437,12 @@ def search_wikipedia(tok, sentences=1):
 
 def search_urban_dictionary(token):
     global stats
+    global urban_dictionnary_available
+
+    # maybe we just cannot use it?
+    if not urban_dictionnary_available:
+        return (False, None, None)
+    
     print("searching Urban Dictionary for ",token.lemma_)
     stats['words searched Urban Dictionary'] = stats['words searched Urban Dictionary'] + 1
     try:
@@ -448,6 +473,8 @@ def search_urban_dictionary(token):
                 return (False, explanation, source) 
     except KeyError as e:
         print("\terror with Urban Dictionary", e)
+    except urllib.error.URLError as e:
+        print("\tunable to connect Urban Dictionary", e)         
     return (False, None, None)
 
 
