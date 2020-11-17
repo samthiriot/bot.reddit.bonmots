@@ -69,7 +69,7 @@ for row in c.fetchall():
     print('\t\t',row[0],':\t',row[1])
 
 from lru import LRU
-cache_rejected = LRU(10000)
+cache_rejected = LRU(50000)
 # fill in the table with entries
 c.execute('''SELECT * FROM rejected ORDER BY RANDOM() LIMIT ?''', (int(cache_rejected.get_size()*2/3),))
 for row in c:
@@ -242,10 +242,18 @@ accentspossibles['u'] = ['u','ù','û','ü']
 accentspossibles['y'] = ['y','ÿ','i']
 accentspossibles['c'] = ['c','ç']
 
-def combinaisons_diacritiques(word):
+def combinaisons_diacritiques(word, changed=0):
     global accentspossibles
+    cards = [len(accentspossibles.get(letter,[letter])) for letter in word]
+    max_cards = max(cards)
+    max_tests = max_cards ** 2
+    # generate the lists of possible combinations
     possibilities = [ accentspossibles.get(letter,[letter]) for letter in word ]
+    i = 0
     for combination in itertools.product(*possibilities):
+        i = i + 1
+        if i >= max_tests:
+            break
         yield ''.join(combination)
     pass
 
@@ -268,7 +276,7 @@ def combinaisons_consonnes(word):
     pass
 
 
-list(combinaisons_consonnes("maronnier"))
+#list(combinaisons_consonnes("maronnier"))
 
 
 def zipf_frequency_of_combinaisons_lower_than(word, threshold):
@@ -277,16 +285,16 @@ def zipf_frequency_of_combinaisons_lower_than(word, threshold):
     or the highest zipf frequency
     '''
     _max = 0
-    print('\nzipf frequency of ',word,'?') #élèment            
+    #print('\nzipf frequency of',word,'?') #élèment            
     for d1 in combinaisons_consonnes(word.lower()):
         for d in combinaisons_diacritiques(d1): 
-            print(d, end=' ')
+            #print(d, end=' ')
             f = wordfreq.zipf_frequency(d,'fr')
             if f >= threshold:
                 return f
             if f > _max:
                 _max = f
-    print()
+    #print()
     return _max
 
 
