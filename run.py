@@ -14,7 +14,7 @@ from urllib.parse import quote_plus
 print("init: reading parameters")
 import json
 config = dict()
-config['readonly'] = False
+config['readonly'] = True
 
 with open('config-reddit.json') as f:
     config['reddit'] = json.load(f)
@@ -40,8 +40,18 @@ reddit = praw.Reddit(
 )
 subreddit = reddit.subreddit("france")
 allreddit = reddit.subreddit("all")
+myprofile = reddit.redditor("bot-mots-rares")
+if myprofile.is_suspended:
+    print('\toops, seems like my account is suspended o_O')
+    quit()
+if not myprofile.verified:
+    print('\toops, seems like by profile is not verified')
 
-print("init: connecting database")
+print('\tcomment-karma:\t',myprofile.comment_karma,'\t:-(' if myprofile.comment_karma < 0 else '\t:-)')
+print('\ttotal karma:\t',myprofile.total_karma,'\t:-(' if myprofile.total_karma < 0 else '\t:-)')
+
+print("init: connecting terms database")
+
 import sqlite3
 conn = sqlite3.connect('terms.db')
 c = conn.cursor()
@@ -92,6 +102,26 @@ def add_word_rejected_db(word, reason):
         print(e)
         pass
 
+
+print("init: wiktionary database")
+wiktionnaire_conn = sqlite3.connect('./sources/wiktionnaire/wiktionnaire.sqlite')
+wiktionnaire_cursor = wiktionnaire_conn.cursor()
+wiktionnaire_cursor.execute('''SELECT COUNT(*) FROM definitions''')
+print("\tthere are",wiktionnaire_cursor.fetchone()[0],"definitions from wiktionnaire")
+
+def get_word_wiktionnaire(word):
+    global wiktionnaire_cursor
+    wiktionnaire_cursor.execute('SELECT * FROM definitions WHERE title=?', (word,))
+    row = wiktionnaire_cursor.fetchone()
+    if row is None:
+        return None    
+    else:
+        return dict(zip([c[0] for c in wiktionnaire_cursor.description], row))       
+
+
+#search_word_wiktionnaire('palmipède')
+
+
 print("init: loading spacy french models")
 import spacy
 # https://spacy.io/models/fr
@@ -131,13 +161,6 @@ wikipedia.set_lang('fr')
 
 wikipedia_blacklisted_categories = set(['informatique','commune','ébauche'])
 
-print("init: wiktionary API")
-from wiktionaryparser import WiktionaryParser
-wiktionary = WiktionaryParser()
-wiktionary.set_default_language('french')
-#?parser.exclude_part_of_speech('noun')
-#parser.include_relation('alternative forms')
-
 # TODO académie française
 # ici! https://www.cnrtl.fr/definition/gougnafier
 # https://academie.atilf.fr/9/
@@ -145,7 +168,7 @@ wiktionary.set_default_language('french')
 print("init: urban dictionary")
 import urbandictionary
 
-print("init: done")
+print("init: done\n\n")
 
 # TODO adaptative frequency
 # TODO introspection, vérifier résultat: mémoriser où on a posté, aller voir de temps en temps (les plus anciens?) messages et mettre à jour les votes
@@ -169,12 +192,16 @@ stats['words rejected db (cache)'] = 0
 stats['words searched'] = 0
 stats['words searched wikipedia'] = 0
 stats['words rejected wikipedia'] = 0
-stats['words searched wiktionary'] = 0
 stats['words searched Urban Dictionary'] = 0
 stats['words found wikipedia'] = 0
-stats['words found wiktionary'] = 0
 stats['words found Urban Dictionary'] = 0
 stats['words without definition'] = 0
+
+stats['words searched wiktionnaire'] = 0
+stats['words found wiktionnaire'] = 0
+stats['words rejected wiktionnaire'] = 0
+stats['words defined wiktionnaire'] = 0
+
 stats['replies possible'] = 0
 stats['replies posted'] = 0
 stats['ratelimit reddit reply'] = 0
@@ -205,13 +232,7 @@ def combinaisons_diacritiques(word):
         yield ''.join(combination)
     pass
 
-consonnes_multiples = dict()
-consonnes_multiples['n'] = ['n','nn']
-consonnes_multiples['nn'] = ['nn','n']
-consonnes_multiples['r'] = ['r','rr']
-consonnes_multiples['rr'] = ['rr','r']
-
-consonnes_doublables = set(['n','r'])
+consonnes_doublables = set(['n','r','m','t'])
 
 def combinaisons_consonnes(word):
     global consonnes_doublables
@@ -239,12 +260,14 @@ def zipf_frequency_of_combinaisons_lower_than(word, threshold):
     or the highest zipf frequency
     '''
     _max = 0
-    for d in combinaisons_diacritiques(combinaisons_consonnes(word.lower())):
-        f = wordfreq.zipf_frequency(d,'fr')
-        if f >= threshold:
-            return f
-        if f > _max:
-            _max = f
+    for d1 in combinaisons_consonnes(word.lower()):
+        for d in combinaisons_diacritiques(d1): 
+            #print('zipf frequency of ',d)
+            f = wordfreq.zipf_frequency(d,'fr')
+            if f >= threshold:
+                return f
+            if f > _max:
+                _max = f
     return _max
 
 
@@ -263,10 +286,56 @@ def reddit_results_highter_than(word, threshold):
     for res in results:
         count = count + 1
         if count >= threshold:
-            print("term",word,"found more than",threshold,"times")
+            print("\tterm",word,"found more than",threshold,"times")
             return threshold
-    print("term",word,"found ",count,"times")
+    print("\tterm",word,"found ",count,"times")
     return count
+
+def search_word_wiktionnaire(word):
+    
+    global stats
+
+    print('searching wiktionnaire', word)
+    stats['words searched wiktionnaire'] = stats['words searched wiktionnaire'] + 1
+
+    info = get_word_wiktionnaire(word)
+
+    # if not in Wiktionary
+    if info is None:
+        return (False, None, None)
+
+    stats['words found wiktionnaire'] = stats['words found wiktionnaire'] + 1
+    print('\t',json.dumps(info, sort_keys=True, indent=4))
+
+    # if too many definitions, blacklist (too much uncertainty)
+    if info['count_definitions'] >= 5:
+        add_word_rejected_db(tok, "too many definitions in wiktionary")
+        print('\trejecting,',word,'too many definition (',info['count_definitions']+') in wiktionnaire')
+        stats['words rejected wiktionnaire'] = stats['words rejected wiktionnaire'] + 1
+        return (True, None, None)
+
+    if info['injure'] or info['raciste']:
+        stats['words rejected wiktionnaire'] = stats['words rejected wiktionnaire'] + 1
+        add_word_rejected_db(tok, "defined as injurial in wiktionary")
+        print('\trejecting,',word,'is defined as injurial in wiktionnaire')
+        return (True, None, None)
+
+    if info['sigle']:
+        add_word_rejected_db(tok, "defined as a sigle in wiktionary")
+        print('\trejecting,',word,'is defined as a sigle in wiktionnaire')
+        stats['words rejected wiktionnaire'] = stats['words rejected wiktionnaire'] + 1
+        return (True, None, None)
+
+    # if the word is of interest, use it :-)
+    if info['argot'] or info['desuet'] or info['vieilli'] or info['rare'] or info['ironique'] or info['familier']:
+        # TODO process the definition!!!
+        stats['words defined wiktionnaire'] = stats['words defined wiktionnaire'] + 1
+        explanation = info['bloc_definition']
+        source = '[Wiktionnaire](https://fr.wiktionary.org/wiki/'+quote(info['title'])+')'        
+        return (False, explanation, source)
+
+    # return nothing
+    return (False, None, None)
 
 
 blacklisted_wikipedia = ['jeu', 'application', 'marque']
@@ -346,28 +415,6 @@ def search_wikipedia(tok, sentences=1):
     return (False, explanation, source)
 
 
-def search_wiktionary(searched):
-    global stats
-    while True:
-        print("searching wiktionary for ",searched)
-        defs = wiktionary.fetch(searched, 'french')
-        if len(defs) > 0 and len(defs[0]['definitions']) > 0:
-            # things detected as interjection lead to many, many useless definitions
-            if defs[0]['definitions'][0]['partOfSpeech'] == 'interjection':
-                blocksearch = True
-                break
-            defi = defs[0]['definitions'][0]['text']
-            if defi[1].startswith('plural of '):
-                searched = defi[10:]
-                continue
-            explanation = ':'.join(defs[0]['definitions'][0]['text'])
-            source = 'Wiktionary'
-            stats['words found wiktionary'] = stats['words found wiktionary'] + 1
-            print(defs)
-            return (False, explanation, source)
-        break
-    return (False, None, None)
-
 
 def search_urban_dictionary(token):
     global stats
@@ -400,17 +447,17 @@ def search_urban_dictionary(token):
                 stats['words found Urban Dictionary'] = stats['words found Urban Dictionary'] + 1
                 return (False, explanation, source) 
     except KeyError as e:
-        print("error with Urban Dictionary", e)
+        print("\terror with Urban Dictionary", e)
     return (False, None, None)
 
 
 def find_definitions_in_submission(comment):
-    global wiktionary
     global c
     global blacklist
     global reddit
     global config
     global stats
+    print('.', end='', flush=True)
     body = comment.body
     # tokenisation: split the string into tokens
     nbsearched = 0
@@ -506,7 +553,8 @@ def find_definitions_in_submission(comment):
             stats['words rejected frequency'] = stats['words rejected frequency'] + 1
             add_word_rejected_db(token.lemma_, "en zipf frequency > 1.5")
             continue
-        
+
+        print('\n')
         # ignorons les termes fréquents sur reddit
         count_reddit = reddit_results_highter_than(token.lemma_, 10)
         if count_reddit >= 5:
@@ -523,16 +571,16 @@ def find_definitions_in_submission(comment):
         source = None
         blocksearch = False # if true, stop searching for it because we have a good reason to think it is bad
 
+        # search wiktionnaire first (it is local and precise)
+        (blocksearch, explanation, source) = search_word_wiktionnaire(token.text)
+        if not blocksearch and explanation is None and token.text.lower() != token.lemma_.lower():
+            (blocksearch, explanation, source) = search_word_wiktionnaire(token.lemma_)
+
         # search Wikipedia for the token
-        (blocksearch, explanation, source) = search_wikipedia(token.text)
+        if not blocksearch and explanation is None:
+            (blocksearch, explanation, source) = search_wikipedia(token.text)
         if not blocksearch and explanation is None and token.text.lower() != token.lemma_.lower():
             (blocksearch, explanation, source) = search_wikipedia(token.lemma_)
-
-        # search Wiktionary
-        # TODO réactiver - peut être
-        #if not blocksearch and explanation is None:
-        #    (blocksearch, explanation, source) = search_wiktionary(token.lemma_)
-        #    stats['words searched wiktionary'] = stats['words searched wiktionary'] + 1
 
         # search Urban Dictionary
         if not blocksearch and explanation is None:
@@ -633,11 +681,11 @@ def parse_comment(comment):
 
 
 i = 0
-for submission in subreddit.stream.submissions():
-#for submission in subreddit.hot(limit=100):
+#for submission in subreddit.stream.submissions():
+for submission in subreddit.hot(limit=100):
     if submission.locked or submission.hidden or submission.quarantine or submission.num_comments==0:
         continue
-    print("THREAD > ", submission.title,'(',submission.num_comments,'comments)\n')
+    print("\nTHREAD > ", submission.title,'(',submission.num_comments,'comments)')
     dt = datetime.datetime.now() 
     utc_time = dt.replace(tzinfo = timezone.utc) 
     utc_timestamp = utc_time.timestamp() 
