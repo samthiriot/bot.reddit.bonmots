@@ -9,6 +9,52 @@ Il vise ainsi à faciliter la compréhension des messages par le plus grand nomb
 De façon annexe, le bot peut aussi être amusant à l'occasion, lorsqu'il exhume une définition ancienne. 
 Il remercie également de l'usage des tournures désuètes. 
 
+Plus largement, le développement et l'interaction avec des bots est intéressante, en ce qu'elle constitue l'exemple le plus proche de nous et le plus fréquent de robots ou algorithmes.
+
+
+## Quand poste-t-on?
+
+On explore les posts et leurs commentaires avec les principes suivants:
+* ne pas explorer les commentaires 
+* ne pas explorer les commentaires cachés, modérés, verrouillés
+* ne pas explorer les commentaires trop anciens
+
+Pour chaque post, le texte est décomposé par un tokenizer adapté à la langue française et à la syntaxe reddit. 
+Chaque mot est ensuite lemmatisé, de façon à en conserver la racine.
+
+Chaque mot peut être rejeté si:
+* le mot fait partie d'une citation au sens reddit
+* le mot fait partie d'un lien web
+* le mot est trop court (moins de 4 lettres)
+* le mot est étiqueté par l'analyseur syntaxique comme un nom propre
+* le mot fait partie d'une liste noire développée manuellement pour supprimer les termes propres aux forums (upvote, downvote, crosspost) 
+* le mot est fréquent dans les corpus francophones ou anglophones, c'est-à-dire qu'il a un rang-fréquence de Zipf supérieur à 1.5(implémenté avec le paquet [wordfreq](https://pypi.org/project/wordfreq/) )
+* une variation de diactritiques ("mecanicien", "mécanicien", "mecanicién") et/ou de doublements de consonnes ("trape", "trappe") conduit à un rang-fréquence de Zipf supérieur à 1.5 
+* le mot est trouvé dans le wiktionnaire et 
+  * a au moins 5 définitions, ce qui le rend polysémique et difficile à définir de façon pertinente
+  * a au moins une définition injurieuse ou raciste
+  * est défini comme un sigle
+* le mot est trouvé plus de 5 fois sur les reddits r/france, r/europe ou r/news
+* le mot est trouvé sur Wikipedia:
+  * mais redirige vers un mot dont la fréquence linguistique est élevée (rang-fréquence de Zipf supérieur à 1.5)
+  * mais est associé à une catégorie en liste noire, dont: page en ébauche; page controversée; page portant sur des produits informatiques
+* le mot est trouvé sur Urban Dictionnary:
+  * mais est défini comme une exclamation ou une interjection
+
+Si le mot n'a pas été rejeté, on en cherche une définition:
+* sur le Wiktionnaire, sur une copie locale réduite et filtrée afin d'éviter les appels réseau et la charge des serveurs de la communauté
+  * on ne définit sur la base du wiktionnaire que si le mot est étiqueté rare, ironique, figuré, daté ou veilli
+* sur Wikipedia
+* sur Urban Dictionary
+
+## Efficacité environnementale
+
+Afin d'éviter la consommation d'énergie, et donc les émissions carbone, inutile, on évite à la fois les calculs intensifs et les accès réseau:
+* une base de données locale bien indexée stocke les mots qui ont déjà été étudiés afin d'en éviter la recherche récurrente,
+* on élimine au maximum les mots qui risquent d'être fréquents en en cherchant les variations typographiques, afin d'éviter des requêtes réseau inutiles pour chercher à définir des mots communs mais mal orthographiés
+* le Wiktionnaire, souvent sollicité, est dupliqué localement (comme l'autorise la license), et indexé afin de permettre des requêtes rapides, 
+
+
 ## Intérêt
 
 Ce qui a commencé comme un projet amusant est devenu un sujet loin d'être trivial.
