@@ -428,13 +428,14 @@ def format_wiktionnaire_definition(definition):
     
     return substitute_wiki_with_reddit(result)
 
+
 deftest = """{{fr-rég|}}
 '''laudation''' {{pron||fr}} {{f}}
 # {{rare|fr}} louange|Louange, éloge.
 #* ''Il est vraisemblable que, lors de la '''laudation''' que nous venons de rapporter, Girard de Cossonay n’était plus vivant.'' {{source|''Mémoires et documents'', Société d’histoire de la Suisse romande, 1858}}
 """
 
-print(format_wiktionnaire_definition(deftest))
+#print(format_wiktionnaire_definition(deftest))
 
 deftest = """{{fr-rég|pa.ne.ʒi.ʁik}}
 '''panégyrique''' {{pron|pa.ne.ʒi.ʁik|fr}} {{m}}
@@ -444,7 +445,7 @@ deftest = """{{fr-rég|pa.ne.ʒi.ʁik}}
 #* ''Pendant que des regrets unanimes se formulaient à la Bourse, sur le port, dans toutes les maisons ; quand le '''panégyrique''' d’un homme irréprochable, honorable et bienfaisant, remplissait toutes les bouches, Latournelle et Dumay, […], vendaient, réalisaient, payaient et liquidaient.'' {{source|{{Citation/Honoré de Balzac/Modeste Mignon/1855}}}}
 #* ''Un colonel ventripotent lit, trémolos dans la voix, un '''panégyrique''' de l’État ouvrier et paysan.'' {{source|{{nom w pc|Olivier|Guez}} et {{nom w pc|Jean-Marc|Gonin}}, ''{{w|La Chute du Mur}}'', {{w|Le Livre de Poche}}, 2011, {{ISBN|978-2-253-13467-1}}}}
 """
-print(format_wiktionnaire_definition(deftest))
+#print(format_wiktionnaire_definition(deftest))
 
 
 
