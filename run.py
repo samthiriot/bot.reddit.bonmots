@@ -14,7 +14,7 @@ from urllib.parse import quote_plus
 print("init: reading parameters")
 import json
 config = dict()
-config['readonly'] = True
+config['readonly'] = False
 
 with open('config-reddit.json') as f:
     config['reddit'] = json.load(f)
@@ -226,6 +226,7 @@ blacklist = set([
                 "downvote","downvoter",
                 "crosspost","crossposter",
                 'flood','flooder',
+                'imageboard',
                 "viméo","vimeo",
                 "despacito",
                 "covid","déconfinement","chloroquinine","reconfinement","confinement"
@@ -237,6 +238,7 @@ accentspossibles['e'] = ['e','é','è','ê','ë']
 accentspossibles['è'] = ['è','é','e','ê']
 accentspossibles['é'] = ['é','è','e','ê']
 accentspossibles['i'] = ['i','î','ï','y']
+accentspossibles['î'] = ['î','i']
 accentspossibles['o'] = ['o','ô','ö']
 accentspossibles['u'] = ['u','ù','û','ü']
 accentspossibles['y'] = ['y','ÿ','i']
@@ -246,7 +248,7 @@ def combinaisons_diacritiques(word, changed=0):
     global accentspossibles
     cards = [len(accentspossibles.get(letter,[letter])) for letter in word]
     max_cards = max(cards)
-    max_tests = max_cards ** 2
+    max_tests = max_cards ** 2 * len(word)
     # generate the lists of possible combinations
     possibilities = [ accentspossibles.get(letter,[letter]) for letter in word ]
     i = 0
@@ -298,6 +300,12 @@ def zipf_frequency_of_combinaisons_lower_than(word, threshold):
     return _max
 
 
+def wait(seconds):
+    try:
+        time.sleep(seconds)
+    except KeyboardInterrupt:
+        return
+
 def reddit_results_highter_than(word, threshold):
     '''
     returns the threshold if there are that many answers in reddit,
@@ -318,7 +326,129 @@ def reddit_results_highter_than(word, threshold):
     print("\tterm",word,"found ",count,"times")
     return count
 
-def search_word_wiktionnaire(word):
+
+def substitute_wiki_with_reddit(txt):
+    
+    result = txt
+    
+    # replace bold+italic
+    result = result.replace("'''''","___")
+    # replace bold
+    result = result.replace("'''","__")
+    # replace italic
+    result = result.replace("''","_")
+    
+    return result
+
+
+def format_wiktionnaire_definition(definition):
+    result = ''
+    
+    count_definitions = definition.count('# ')+1
+    
+    before = None
+    current_word = ''
+    
+    in_model = False
+    current_model = None
+    current_model_options = list()
+    
+    in_link = False
+    
+    current_enumeration = 0
+    
+    # TODO wikilinks
+    
+    for letter in definition:
+        if before is not None:
+            if letter == '{' and before == '{':
+                current_word = ''
+                in_model = True
+                current_model = None
+                current_model_options = list()
+            elif letter == '|':
+                if current_model is None:
+                    current_model = current_word
+                elif len(current_word)>0:
+                    current_model_options.append(current_word)
+                current_word = ''
+            elif letter == '}' and before == '}':
+                in_model = False
+                if current_model is None:
+                    current_model = current_word
+                elif len(current_word)>0:
+                    current_model_options.append(current_word)
+                current_word = ''
+                print('end of model',current_model,'with options',current_model_options)
+                if current_model == 'source' and len(current_model_options) > 0:
+                    result = result + ' ^('+substitute_wiki_with_reddit(current_model_options[0])+')'
+                elif current_model.endswith('rare'):
+                    result = result + '_('+current_model+')_'
+                
+        # treat enumerations and examples                
+        if letter == '*' and before == '#':
+            # we are in an example
+            result = result + '\n> '
+        elif count_definitions > 1 and before == '#' and letter.isspace():
+            current_enumeration = current_enumeration + 1
+            result = result + '\n'+str(current_enumeration)+'. '
+        
+        # treat wikilinks
+        #if in_link and letter not in set(['|',']']):
+        #    current_word = current_word + letter
+        
+        if letter == '[':
+            if before is not None and before == '[':
+                in_link = True
+        elif letter == ']':
+            if before is not None and before == ']':
+                in_link = False
+                print('end of link',current_word)   
+            #result = result + '('+current_word+')[https://fr.wiktionary.org/wiki/'+quote(current_word)+']'
+            result = result + ' ' + current_word
+            current_word = ''
+        elif letter.isalnum():
+            current_word = current_word + letter
+        elif letter in set(['{','|','}','#','*']):
+            pass
+        elif letter.isspace() and not in_model:
+            # do not pile up spaces
+            if before is not None and not before.isspace():
+                result = result + ' ' + current_word
+            else:
+                print('ignored space')
+            current_word = ''
+        else:
+            current_word = current_word + letter
+        
+        before = letter
+    
+    # replace "  "
+    result = result.replace("  "," ")
+    
+    return substitute_wiki_with_reddit(result)
+
+deftest = """{{fr-rég|}}
+'''laudation''' {{pron||fr}} {{f}}
+# {{rare|fr}} louange|Louange, éloge.
+#* ''Il est vraisemblable que, lors de la '''laudation''' que nous venons de rapporter, Girard de Cossonay n’était plus vivant.'' {{source|''Mémoires et documents'', Société d’histoire de la Suisse romande, 1858}}
+"""
+
+print(format_wiktionnaire_definition(deftest))
+
+deftest = """{{fr-rég|pa.ne.ʒi.ʁik}}
+'''panégyrique''' {{pron|pa.ne.ʒi.ʁik|fr}} {{m}}
+# [[discours|Discours]] [[public]] [[faire|fait]] à la [[louange]] de [[quelqu’un]] ou de [[quelque chose]], [[éloge]].
+#* ''Ô crime ! ô honte ! La tribune du peuple français a retenti du '''panégyrique''' de Louis XVI ; nous avons entendu vanter les vertus et les bienfaits du tyran !'' {{source|{{w|Maximilien Robespierre}}, ''Sur le parti de prendre à l’égard de Louis XVI'', novembre 1792}}
+#* ''L’un célébrait les louanges d’Athelsthane dans un '''panégyrique '''lugubre ; un autre redisait, dans un poème généalogique en langue saxonne, les noms étrangement durs et sauvages de ses nobles ancêtres.'' {{source|{{Citation/Walter Scott/Ivanhoé/1820}}}}
+#* ''Pendant que des regrets unanimes se formulaient à la Bourse, sur le port, dans toutes les maisons ; quand le '''panégyrique''' d’un homme irréprochable, honorable et bienfaisant, remplissait toutes les bouches, Latournelle et Dumay, […], vendaient, réalisaient, payaient et liquidaient.'' {{source|{{Citation/Honoré de Balzac/Modeste Mignon/1855}}}}
+#* ''Un colonel ventripotent lit, trémolos dans la voix, un '''panégyrique''' de l’État ouvrier et paysan.'' {{source|{{nom w pc|Olivier|Guez}} et {{nom w pc|Jean-Marc|Gonin}}, ''{{w|La Chute du Mur}}'', {{w|Le Livre de Poche}}, 2011, {{ISBN|978-2-253-13467-1}}}}
+"""
+print(format_wiktionnaire_definition(deftest))
+
+
+
+def search_word_wiktionnaire(comment, word):
     
     global stats
 
@@ -336,7 +466,7 @@ def search_word_wiktionnaire(word):
 
     # if too many definitions, blacklist (too much uncertainty)
     if info['count_definitions'] >= 5:
-        add_word_rejected_db(tok, "too many definitions in wiktionary")
+        add_word_rejected_db(word, "too many definitions in wiktionary")
         print('\trejecting,',word,'too many definition (',info['count_definitions']+') in wiktionnaire')
         stats['words rejected wiktionnaire'] = stats['words rejected wiktionnaire'] + 1
         return (True, None, None)
@@ -355,9 +485,18 @@ def search_word_wiktionnaire(word):
 
     # if the word is of interest, use it :-)
     if info['argot'] or info['desuet'] or info['vieilli'] or info['rare'] or info['ironique'] or info['familier']:
+        # upvote the comment :-)
+        comment.upvote()
         # TODO process the definition!!!
         stats['words defined wiktionnaire'] = stats['words defined wiktionnaire'] + 1
         explanation = info['bloc_definition']
+        # replace wikilinks by links to wiktionnary
+        #pattern = re.compile('\[\[([\w]+)\]\]')
+        #explanation = pattern.sub('[\\1](https://fr.wiktionary.org/wiki/?term=\\1)', explanation)
+        #explanation = explanation.replace('[[','').replace(']]','')
+        explanation = format_wiktionnaire_definition(explanation)
+        
+        # forge source
         source = '[Wiktionnaire](https://fr.wiktionary.org/wiki/'+quote(info['title'])+')'        
         return (False, explanation, source)
 
@@ -417,7 +556,7 @@ def search_wikipedia(tok, sentences=1):
     # filter based on categories?
     for blacklisted_category in wikipedia_blacklisted_categories:
         if any(blacklisted_category in categorie.lower() for categorie in page_info.categories):
-            print("\nthe wikipedia article ",page_info.title," is about ',blacklisted_category,', reject it")
+            print("\nthe wikipedia article ",page_info.title," is about ",blacklisted_category,", reject it")
             return (False, None, None)
 
     # load the summary   
@@ -473,8 +612,8 @@ def search_urban_dictionary(token):
                 if (d.upvotes - d.downvotes) > (best.upvotes - best.downvotes):
                     best = d
             if not blocksearch and best.word.lower().startswith(searched) and best.upvotes - best.downvotes > 20 and best.upvotes > 100: # enough votes for interest 
-                pattern = re.compile('(.*)\[([\w]+)\](.*)')
-                definition = pattern.sub('\\1[\\2](https://www.urbandictionary.com/define.php?term=\\2)\\3', best.definition)
+                pattern = re.compile('\[([\w]+)\]')
+                definition = pattern.sub('[\\1](https://www.urbandictionary.com/define.php?term=\\1)', best.definition)
                 explanation = best.word + ': ' + definition # best.example
                 source = '[Urban Dictionary](https://www.urbandictionary.com/define.php?term='+quote(best.word)+')'
                 stats['words found Urban Dictionary'] = stats['words found Urban Dictionary'] + 1
@@ -530,7 +669,7 @@ def find_definitions_in_submission(comment):
 
         # do not search in quotes
         if token.is_sent_start:
-            if token.text == '>':
+            if token.text.startswith('>'):
                 inquote = True
                 #print('start of a quote block!')
             elif inquote:
@@ -538,6 +677,7 @@ def find_definitions_in_submission(comment):
                 #print('end of a quote block!')
         if inquote:
             continue
+
         # pass what is not words
         if token.is_space or token.is_punct or token.is_stop or not token.is_alpha or token.like_url:
             continue
@@ -607,9 +747,9 @@ def find_definitions_in_submission(comment):
         blocksearch = False # if true, stop searching for it because we have a good reason to think it is bad
 
         # search wiktionnaire first (it is local and precise)
-        (blocksearch, explanation, source) = search_word_wiktionnaire(token.text)
+        (blocksearch, explanation, source) = search_word_wiktionnaire(comment, token.text)
         if not blocksearch and explanation is None and token.text.lower() != token.lemma_.lower():
-            (blocksearch, explanation, source) = search_word_wiktionnaire(token.lemma_)
+            (blocksearch, explanation, source) = search_word_wiktionnaire(comment, token.lemma_)
 
         # search Wikipedia for the token
         if not blocksearch and explanation is None:
@@ -633,7 +773,29 @@ def find_definitions_in_submission(comment):
              txt = txt + '(je suis [un bot](https://github.com/***REMOVED***/bot.reddit.bonmots) bienveillant mais en apprentissage; répondez-moi si je me trompe, mon développeur surveille les messages)'
              print(txt,'\n\n')
              stats['replies possible'] = stats['replies possible'] + 1 
-             if not config["readonly"]:
+             publish = not config["readonly"]
+             if publish:
+                # first let the user confirm
+                print("\n\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n")
+                try:                 
+                     while True:
+                        val = input("publish? YES, never or no: ").strip()
+                        if val == "YES":
+                            print("=> publishing :D")
+                            break
+                        elif val == 'never':
+                            print("blacklisting", token.text)
+                            add_word_rejected_db(token.text, "manually blacklisted")
+                            publish = False 
+                            break
+                        elif val == 'no':     
+                            publish = False
+                            break
+                        print('?')
+                except KeyboardInterrupt:
+                    print("=> canceled")
+                    publish = False
+             if publish:
                  while True:
                     try:
                         comment.save() # avoids to comment it again
@@ -650,17 +812,14 @@ def find_definitions_in_submission(comment):
                         idx2 = err.find("minute", idx1+4)
                         seconds = 0
                         if idx2 > 0:
-                            seconds = int(err[idx1+5:idx2]) * 60
+                            seconds = int(err[idx1+5:idx2]) * 60 + 3
                         else:
                             idx2 = err.find("second", idx1+4)
                             seconds = int(err[idx1+5:idx2])+1
                         # try to identify how long it should take
                         print(reddit.auth.limits)
                         print("waiting",seconds,"s ... (Ctrl+C to skip this post)")
-                        try:
-                            time.sleep(seconds)
-                        except KeyboardInterrupt:
-                            break
+                        wait(seconds)
                  stats['replies posted'] = stats['replies posted'] + 1
 
              return True # break and stop searching
@@ -716,21 +875,25 @@ def parse_comment(comment):
 
 
 i = 0
-#for submission in subreddit.stream.submissions():
-for submission in subreddit.hot(limit=100):
-    if submission.locked or submission.hidden or submission.quarantine or submission.num_comments==0:
-        continue
-    print("\nTHREAD > ", submission.title,'(',submission.num_comments,'comments)')
-    dt = datetime.datetime.now() 
-    utc_time = dt.replace(tzinfo = timezone.utc) 
-    utc_timestamp = utc_time.timestamp() 
-    for comment in submission.comments:
-        if parse_comment(comment):
-            break
-    i = i + 1
-    if i%50 == 0:
-        print('\n',stats,'\n')
-    stats['posts explored'] = stats['posts explored'] + 1
+while True:
+    #for submission in subreddit.stream.submissions():
+    for submission in subreddit.hot(limit=500):
+        if submission.locked or submission.hidden or submission.quarantine or submission.num_comments==0:
+            continue
+        print("\nTHREAD > ", submission.title,'(',submission.num_comments,'comments)')
+        dt = datetime.datetime.now() 
+        utc_time = dt.replace(tzinfo = timezone.utc) 
+        utc_timestamp = utc_time.timestamp() 
+        for comment in submission.comments:
+            if parse_comment(comment):
+                break
+        i = i + 1
+        if i%50 == 0:
+            print('\n',stats,'\n')
+        stats['posts explored'] = stats['posts explored'] + 1
    
+    print('\n',stats,'\n')
+    print('\nfinished parsing hot messages; will restart in 5 minutes (or Ctrl+C to restart now)')
+    wait(60*5)
 
 
