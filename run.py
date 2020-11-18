@@ -770,7 +770,7 @@ def find_definitions_in_submission(comment):
                 txt = txt + '> '+token.sent.text+'\n\n'
              txt = txt + '*'+token.text+'* est un mot '+qualif+' en Français ! J\'en ai '+random.choice(['trouvé','déniché'])+' une définition sur '+source+':\n\n'
              txt = txt + explanation + '\n\n'
-             txt = txt + '(je suis [un bot](https://github.com/***REMOVED***/bot.reddit.bonmots) bienveillant mais en apprentissage; répondez-moi si je me trompe, mon développeur surveille les messages)'
+             txt = txt + '(je suis [un bot](https://github.com/samthiriot/bot.reddit.bonmots) bienveillant mais en apprentissage; répondez-moi si je me trompe, mon développeur surveille les messages)'
              print(txt,'\n\n')
              stats['replies possible'] = stats['replies possible'] + 1 
              publish = not config["readonly"]
