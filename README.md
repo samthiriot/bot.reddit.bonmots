@@ -1,50 +1,49 @@
 # bot.reddit.bonmots
 
-Un bot reddit prévu pour les subreddits francophones tels que r/france.
+Un bot [reddit](https://fr.wikipedia.org/wiki/Reddit) prévu pour les subreddits francophones tels que [r/france](https://www.reddit.com/r/france/).
 
 ## Objectif 
 
-Le rôle principal du bot est de définir les mots peu connus. 
+Le rôle principal du bot est de *définir les mots peu connus*. 
 Il vise ainsi à faciliter la compréhension des messages par le plus grand nombre, y compris ceux qui sont francophones mais pas natifs.
 De façon annexe, le bot peut aussi être amusant à l'occasion, lorsqu'il exhume une définition ancienne. 
-Il remercie également de l'usage des tournures désuètes. 
-
-Plus largement, le développement et l'interaction avec des bots est intéressante, en ce qu'elle constitue l'exemple le plus proche de nous et le plus fréquent de robots ou algorithmes.
+Il remercie également de l'usage des tournures rares ou désuètes en haut-votant les commentaires qui les contiennent.
 
 
-## Quand poste-t-on?
+## Quand le bot poste-t-il ?
 
 On explore les posts et leurs commentaires avec les principes suivants:
-* ne pas explorer les commentaires 
-* ne pas explorer les commentaires cachés, modérés, verrouillés
-* ne pas explorer les commentaires trop anciens
+* ne pas explorer les commentaires ayant une *évaluation trop basse*
+* ne pas explorer les commentaires *cachés, modérés, verrouillés*
+* ne pas explorer les commentaires *trop anciens*
+* ne pas explorer les commentaires si l'on a déjà commenté sur le thread
 
-Pour chaque post, le texte est décomposé par un tokenizer adapté à la langue française et à la syntaxe reddit. 
-Chaque mot est ensuite lemmatisé, de façon à en conserver la racine.
+Pour chaque post, le texte est décomposé par [un tokenizer du paquet spaCy](https://spacy.io/api/tokenizer) adapté à la langue française et à la syntaxe reddit. 
+Chaque mot est ensuite [lemmatisé](https://fr.wikipedia.org/wiki/Lemmatisation), toujours [grâce à spaCy](https://spacy.io) de façon à en conserver la forme la plus courante.
 
-Chaque mot peut être rejeté si:
-* le mot fait partie d'une citation au sens reddit
+Chaque mot peut ensuite être rejeté si: 
+* le mot fait partie d'une citation au sens reddit 
 * le mot fait partie d'un lien web
 * le mot est trop court (moins de 4 lettres)
 * le mot est étiqueté par l'analyseur syntaxique comme un nom propre
-* le mot fait partie d'une liste noire développée manuellement pour supprimer les termes propres aux forums (upvote, downvote, crosspost) 
-* le mot est fréquent dans les corpus francophones ou anglophones, c'est-à-dire qu'il a un rang-fréquence de Zipf supérieur à 1.5(implémenté avec le paquet [wordfreq](https://pypi.org/project/wordfreq/) )
-* une variation de diactritiques ("mecanicien", "mécanicien", "mecanicién") et/ou de doublements de consonnes ("trape", "trappe") conduit à un rang-fréquence de Zipf supérieur à 1.5 
-* le mot est trouvé dans le wiktionnaire et 
-  * a au moins 5 définitions, ce qui le rend polysémique et difficile à définir de façon pertinente
+* le mot fait partie d'une liste noire développée manuellement pour supprimer les termes propres aux forums (par ex: upvote, downvote, crosspost) 
+* le mot est fréquent dans les corpus francophones ou anglophones, c'est-à-dire qu'il a un [rang-fréquence de Zipf](https://fr.wikipedia.org/wiki/Loi_de_Zipf) supérieur à 1.5 (implémenté avec le paquet [wordfreq](https://pypi.org/project/wordfreq/) )
+* une variation de diacritiques ("mecanicien", "mécanicien", "mecanicién") et/ou de doublements de consonnes ("trape", "trappe") conduit à un rang-fréquence de Zipf supérieur à 1.5 
+* le mot est trouvé dans le [Wiktionnaire](https://fr.wiktionary.org/) et 
+  * a au moins 5 définitions, ce qui l'identifie commme [polysémique](https://fr.wikipedia.org/wiki/Polys%C3%A9mie) donc difficile à définir de façon pertinente
   * a au moins une définition injurieuse ou raciste
   * est défini comme un sigle
-* le mot est trouvé plus de 5 fois sur les reddits r/france, r/europe ou r/news
-* le mot est trouvé sur Wikipedia:
-  * mais redirige vers un mot dont la fréquence linguistique est élevée (rang-fréquence de Zipf supérieur à 1.5)
+* le mot est trouvé plus de 5 fois sur les reddits [r/france](https://www.reddit.com/r/france/), [r/france](https://www.reddit.com/r/europe/) ou [r/france](https://www.reddit.com/r/news/), ce qui l'identifie comme un terme d'usage contemporain courant (par exemple "COVID" ne fait pas partie des corpus linguistiques mais ne doit pas être défini)
+* le mot est trouvé sur [Wikipedia](https://fr.wikipedia.org/):
+  * mais redirige vers un mot dont la fréquence linguistique est élevée ([rang-fréquence de Zipf](https://fr.wikipedia.org/wiki/Loi_de_Zipf) supérieur à 1.5)
   * mais est associé à une catégorie en liste noire, dont: page en ébauche; page controversée; page portant sur des produits informatiques
 * le mot est trouvé sur Urban Dictionnary:
   * mais est défini comme une exclamation ou une interjection
 
 Si le mot n'a pas été rejeté, on en cherche une définition:
-* sur le Wiktionnaire, sur une copie locale réduite et filtrée afin d'éviter les appels réseau et la charge des serveurs de la communauté
+* sur le [Wiktionnaire](https://fr.wiktionary.org/), sur une copie locale réduite et filtrée afin d'éviter les appels réseau et la charge des serveurs de la communauté
   * on ne définit sur la base du wiktionnaire que si le mot est étiqueté rare, ironique, figuré, daté ou veilli
-* sur Wikipedia
+* sur [Wikipedia](https://fr.wikipedia.org/)
 * sur Urban Dictionary
 
 ## Efficacité environnementale
@@ -52,7 +51,7 @@ Si le mot n'a pas été rejeté, on en cherche une définition:
 Afin d'éviter la consommation d'énergie, et donc les émissions carbone, inutile, on évite à la fois les calculs intensifs et les accès réseau:
 * une base de données locale bien indexée stocke les mots qui ont déjà été étudiés afin d'en éviter la recherche récurrente,
 * on élimine au maximum les mots qui risquent d'être fréquents en en cherchant les variations typographiques, afin d'éviter des requêtes réseau inutiles pour chercher à définir des mots communs mais mal orthographiés
-* le Wiktionnaire, souvent sollicité, est dupliqué localement (comme l'autorise la license), et indexé afin de permettre des requêtes rapides, 
+* le Wiktionnaire, souvent sollicité, est dupliqué localement (comme l'autorise [la license](https://creativecommons.org/licenses/by-sa/3.0/deed.fr)), et indexé afin de permettre des requêtes rapides, 
 
 
 ## Intérêt
