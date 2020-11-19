@@ -70,31 +70,35 @@ for row in c.fetchall():
 
 from lru import LRU
 cache_rejected = LRU(50000)
-# fill in the table with entries
+# fill in the cache with entries
 c.execute('''SELECT * FROM rejected ORDER BY RANDOM() LIMIT ?''', (int(cache_rejected.get_size()*2/3),))
 for row in c:
     cache_rejected[row[0]]=row[1]
 print("\tloaded",len(cache_rejected),"items in cache")
 
-def is_word_rejected_db(word):
+def is_word_rejected_db(token):
     global c
     global stats
     global cache_rejected
+    
     # first try the cache
-    if word in cache_rejected:
+    if token.lemma_ in cache_rejected:
         stats['words rejected db (cache)'] = stats['words rejected db (cache)'] + 1
-        return cache_rejected[word]
-
+        return cache_rejected[token.lemma_]
+    if token.text in cache_rejected:
+        stats['words rejected db (cache)'] = stats['words rejected db (cache)'] + 1
+        return cache_rejected[token.text]
+    
     #print("searching db for word",word)
     stats['words searched db'] = stats['words searched db'] + 1
-    c.execute('SELECT * FROM rejected WHERE word=?', (word,))
+    c.execute('SELECT * FROM rejected WHERE word=? OR word=? ', (token.lemma_,token.text,))
     row = c.fetchone()
     if row is None:
         return None    
     else:
         reason = row[1]
         # add to cache
-        cache_rejected[word] = reason
+        cache_rejected[word.lemma_] = reason
         #print("word ",word," is rejected in db because",reason)
         return reason
 
@@ -125,6 +129,15 @@ def get_word_wiktionnaire(word):
         return None    
     else:
         return dict(zip([c[0] for c in wiktionnaire_cursor.description], row))       
+
+
+import mwparserfromhell
+
+config_wiktionnaire = dict()
+config_wiktionnaire['templates'] = dict('')
+config_wiktionnaire['templates']['name2text'] = {'m':'_masculin_', 'f':'_féminin_', 'pron':'_pronom_'}
+config_wiktionnaire['templates']['name2alloptions'] = set(['nom w pc'])
+config_wiktionnaire['templates']['name2firstoptions'] = set(['w'])
 
 
 #search_word_wiktionnaire('palmipède')
@@ -225,6 +238,7 @@ blacklist = set([
                 "upvote","upvoter",
                 "downvote","downvoter",
                 "crosspost","crossposter",
+                'basvoté','basvote','hautvoter','hautvote',
                 'flood','flooder',
                 'imageboard',
                 "viméo","vimeo",
@@ -340,93 +354,96 @@ def substitute_wiki_with_reddit(txt):
     
     return result
 
+def format_wiktionnaire_definition_template_recursive(ast):
+    
+    global config_wiktionnaire
+    
+    for tl in ast.filter_templates(recursive=False):
+        
+        tl_name = str(tl.name)
+        #print('processing template', tl_name)
+        
+        # replace content of templates with a constant text
+        if tl_name in config_wiktionnaire['templates']['name2text']:
+            ast.replace(tl, config_wiktionnaire['templates']['name2text'][tl_name])
+        
+        # replace tags starting or finishing with something by their content 
+        elif tl_name.endswith('rare') or tl_name.startswith('argot'):
+            ast.replace(tl, '_('+tl_name+')_')
+        
+        # replace content of source
+        elif tl_name == 'source':
+            ast.replace(tl, ' ^('+str(format_wiktionnaire_definition_template_recursive(tl.params[0].value))+')')
+        
+        # replace with the content of the first option
+        elif tl_name in config_wiktionnaire['templates']['name2firstoptions']:
+            ast.replace(tl, str(format_wiktionnaire_definition_template_recursive(tl.params[0].value)))
+        
+        # replace with name:option[0]
+        elif tl_name in set(['ISBN']):
+            ast.replace(tl, tl_name+':'+str(format_wiktionnaire_definition_template_recursive(tl.params[0].value)))
+        
+        # replace template with the concatenation of all the options
+        elif tl_name in config_wiktionnaire['templates']['name2alloptions']:
+            ast.replace(tl, ' '.join( str(format_wiktionnaire_definition_template_recursive(p.value)) for p in tl.params ) )
+        
+        # remplace Citations
+        elif tl_name.startswith('Citation'):
+            tokens = tl_name.split('/')
+            ast.replace(tl, tokens[1]+', _'+tokens[2]+'_, '+tokens[3])
+        
+        # by default, entirely remove the template
+        else:
+            ast.remove(tl)
+            print('mediawiki: ignoring template', tl_name)
+    
+    return ast
+
 
 def format_wiktionnaire_definition(definition):
+    global config_wiktionnaire
+    
     result = ''
     
-    count_definitions = definition.count('# ')+1
+    ast = mwparserfromhell.parse(definition, skip_style_tags=True)
     
-    before = None
-    current_word = ''
+    # replace any comment
+    for wc in ast.filter_comments():
+        ast.remove(wc)
     
-    in_model = False
-    current_model = None
-    current_model_options = list()
+    # process style
     
-    in_link = False
+    # process templates
+    format_wiktionnaire_definition_template_recursive(ast)
     
+    # process links
+    for wl in ast.filter_wikilinks(recursive=False):
+        ast.replace(wl, str(wl.title))
+    
+    # transform AST into text
+    result = str(ast)
+    
+    # replace italics, bold and co
+    result = substitute_wiki_with_reddit(result)
+    
+    # replace enumerations and examples
+    toprocess = result
+    result = ''    
     current_enumeration = 0
-    
-    # TODO wikilinks
-    
-    for letter in definition:
-        if before is not None:
-            if letter == '{' and before == '{':
-                current_word = ''
-                in_model = True
-                current_model = None
-                current_model_options = list()
-            elif letter == '|':
-                if current_model is None:
-                    current_model = current_word
-                elif len(current_word)>0:
-                    current_model_options.append(current_word)
-                current_word = ''
-            elif letter == '}' and before == '}':
-                in_model = False
-                if current_model is None:
-                    current_model = current_word
-                elif len(current_word)>0:
-                    current_model_options.append(current_word)
-                current_word = ''
-                print('end of model',current_model,'with options',current_model_options)
-                if current_model == 'source' and len(current_model_options) > 0:
-                    result = result + ' ^('+substitute_wiki_with_reddit(current_model_options[0])+')'
-                elif current_model.endswith('rare'):
-                    result = result + '_('+current_model+')_'
-                
+    before = None
+    for letter in toprocess:
         # treat enumerations and examples                
-        if letter == '*' and before == '#':
+        if letter == '*' and before is not None and before == '#':
             # we are in an example
             result = result + '\n> '
-        elif count_definitions > 1 and before == '#' and letter.isspace():
+        elif before == '#' and letter.isspace():
             current_enumeration = current_enumeration + 1
             result = result + '\n'+str(current_enumeration)+'. '
-        
-        # treat wikilinks
-        #if in_link and letter not in set(['|',']']):
-        #    current_word = current_word + letter
-        
-        if letter == '[':
-            if before is not None and before == '[':
-                in_link = True
-        elif letter == ']':
-            if before is not None and before == ']':
-                in_link = False
-                print('end of link',current_word)   
-            #result = result + '('+current_word+')[https://fr.wiktionary.org/wiki/'+quote(current_word)+']'
-            result = result + ' ' + current_word
-            current_word = ''
-        elif letter.isalnum():
-            current_word = current_word + letter
-        elif letter in set(['{','|','}','#','*']):
-            pass
-        elif letter.isspace() and not in_model:
-            # do not pile up spaces
-            if before is not None and not before.isspace():
-                result = result + ' ' + current_word
-            else:
-                print('ignored space')
-            current_word = ''
-        else:
-            current_word = current_word + letter
-        
+        elif not letter in set(['#']):
+            result = result + letter 
         before = letter
     
-    # replace "  "
-    result = result.replace("  "," ")
-    
-    return substitute_wiki_with_reddit(result)
+    return result
 
 
 deftest = """{{fr-rég|}}
@@ -434,8 +451,9 @@ deftest = """{{fr-rég|}}
 # {{rare|fr}} louange|Louange, éloge.
 #* ''Il est vraisemblable que, lors de la '''laudation''' que nous venons de rapporter, Girard de Cossonay n’était plus vivant.'' {{source|''Mémoires et documents'', Société d’histoire de la Suisse romande, 1858}}
 """
-
 #print(format_wiktionnaire_definition(deftest))
+
+
 
 deftest = """{{fr-rég|pa.ne.ʒi.ʁik}}
 '''panégyrique''' {{pron|pa.ne.ʒi.ʁik|fr}} {{m}}
@@ -445,6 +463,20 @@ deftest = """{{fr-rég|pa.ne.ʒi.ʁik}}
 #* ''Pendant que des regrets unanimes se formulaient à la Bourse, sur le port, dans toutes les maisons ; quand le '''panégyrique''' d’un homme irréprochable, honorable et bienfaisant, remplissait toutes les bouches, Latournelle et Dumay, […], vendaient, réalisaient, payaient et liquidaient.'' {{source|{{Citation/Honoré de Balzac/Modeste Mignon/1855}}}}
 #* ''Un colonel ventripotent lit, trémolos dans la voix, un '''panégyrique''' de l’État ouvrier et paysan.'' {{source|{{nom w pc|Olivier|Guez}} et {{nom w pc|Jean-Marc|Gonin}}, ''{{w|La Chute du Mur}}'', {{w|Le Livre de Poche}}, 2011, {{ISBN|978-2-253-13467-1}}}}
 """
+#print(format_wiktionnaire_definition(deftest))
+
+deftest = """{{fr-rég|ɲuf}}
+'''gnouf''' {{pron|ɲuf|fr}} {{m}}
+# {{argot|fr}} {{lexique|prison|fr}} [[prison|Prison]], poste de [[police]].
+#* ''C’est tellement vite fait de se retrouver au '''gnouf''' !'' {{source|[[w:Jean Guy Le Dano|Jean Guy Le Dano]], ''La mouscaille'', Flammarion, 1973, page 69}}
+#* ''Arrivé dans un garage soupçonné de carambouilles, au moment d’une rafle organisée par la police, il a été embarqué sans discernement, allez, tout le monde au '''gnouf''' !'' {{source|Jean Raje, ''L’encabané, au pays du droit des hommes'', Société des Écrivains, 2007, page 30}}
+# {{argot militaire|fr}} {{en particulier}} Prison [[militaire]].
+#* ''Jeannet, dans son dernier mois de service, s'était fait arracher ses brisques et mettre au '''gnouf''' après une altercation avec son capitaine.'' {{source|{{w|Hervé Bazin}}, {{w|''Cri de la chouette''}}, Grasset, 1972, réédition Le Livre de Poche, page 93}}"""
+
+#print(format_wiktionnaire_definition(deftest))
+
+deftest = """{{fr-r\u00e9g|\u0281a.s\u0254}}\n'''rasso''' {{pron|\u0281a.s\u0254|fr}} {{m}}\n# [[rassemblement|Rassemblement]] d\u2019amateurs de [[tuning]].\n#* ''Les rassemblements (ou \u00ab '''rassos''' \u00bb) occupent les parkings des hypermarch\u00e9s les soirs de week-end : on s\u2019y rencontre entre amateurs pour \u00e9changer pi\u00e8ces, bons plans et conseils, et pour s\u2019\u00e9clater entre potes.'' {{source|St\u00e9phanie {{pc|Maurice}}, ''La passion du tuning'', Seuil, 2015, coll. Raconter la vie, page 8}}"""
+
 #print(format_wiktionnaire_definition(deftest))
 
 
@@ -468,18 +500,19 @@ def search_word_wiktionnaire(comment, word):
     # if too many definitions, blacklist (too much uncertainty)
     if info['count_definitions'] >= 5:
         add_word_rejected_db(word, "too many definitions in wiktionary")
-        print('\trejecting,',word,'too many definition (',info['count_definitions']+') in wiktionnaire')
+        print('\trejecting,',word,'too many definition (',str(info['count_definitions'])+') in wiktionnaire')
         stats['words rejected wiktionnaire'] = stats['words rejected wiktionnaire'] + 1
         return (True, None, None)
 
     if info['injure'] or info['raciste']:
         stats['words rejected wiktionnaire'] = stats['words rejected wiktionnaire'] + 1
-        add_word_rejected_db(tok, "defined as injurial in wiktionary")
+        print('this comment contains injurial stuff:\n',comment.body)
         print('\trejecting,',word,'is defined as injurial in wiktionnaire')
+        add_word_rejected_db(word, "defined as injurial in wiktionary")
         return (True, None, None)
 
     if info['sigle']:
-        add_word_rejected_db(tok, "defined as a sigle in wiktionary")
+        add_word_rejected_db(word, "defined as a sigle in wiktionary")
         print('\trejecting,',word,'is defined as a sigle in wiktionnaire')
         stats['words rejected wiktionnaire'] = stats['words rejected wiktionnaire'] + 1
         return (True, None, None)
@@ -562,7 +595,13 @@ def search_wikipedia(tok, sentences=1):
 
     # load the summary   
     explanation = page_info.summary
-    
+    # emphasis the word defined
+    explanation = explanation.replace(' '+tok+' ',' _'+tok+'_ ')
+    # replace weird punctuation
+    explanation = explanation.replace(', ,',',').replace(', :', ':').replace(',.','.').replace(',:',':')
+    # skip lines visibly
+    explanation = explanation.replace('\n','\n\n')
+
     source = '[Wikipedia](https://fr.wikipedia.org/wiki/'+quote(page_info.title)+')'
     
     # so we found a definition
@@ -572,7 +611,7 @@ def search_wikipedia(tok, sentences=1):
     
     # do not accept several specific words
     if any(blacklisted_word in explanation.lower() for blacklisted_word in blacklisted_wikipedia):
-        print("\n\n!!! rejected word",tok,"in wikipedia because it matches a blacklisted concept\n\n")
+        print("\n\n!!! rejected word",tok,"in wikipedia because it matches one of blacklisted concepts (",blacklisted_wikipedia,")\n\n")
         stats['words rejected wikipedia'] = stats['words rejected wikipedia'] + 1
         add_word_rejected_db(tok, "blacklisted concept in wikipedia")
         return (True, None, None)
@@ -701,7 +740,7 @@ def find_definitions_in_submission(comment):
             continue
         # db
         # TODO: search for what? lemma, text, lower???
-        reason = is_word_rejected_db(token.lemma_)
+        reason = is_word_rejected_db(token)
         if reason is not None:
             stats['words rejected db'] = stats['words rejected db'] + 1
             continue
@@ -763,15 +802,15 @@ def find_definitions_in_submission(comment):
             (blocksearch, explanation, source) = search_urban_dictionary(token)
         
         if explanation is not None:
-             print('_________________________________________________________\n\n', body, '\n\n---------------------------------------\n\n')
+             print('\n\n', ''.join(['https://reddit.com/',comment.permalink]), '\n', '_________________________________________________________\n\n', body, '\n\n---------------------------------------\n\n')
              qualif = random.choice(['très rare','peu connu']) if lexeme.vector_norm == 0 else random.choice(['plutôt rare','assez rare','peu courant','inusité'])
              txt = ''
              if len(body) > len(token.sent.text)*2:
                 # this is a long message, let's quote the sentence
-                txt = txt + '> '+token.sent.text+'\n\n'
+                txt = txt + '> '+token.sent.text.replace('\n','\n> ')+'\n\n'
              txt = txt + '*'+token.text+'* est un mot '+qualif+' en Français ! J\'en ai '+random.choice(['trouvé','déniché'])+' une définition sur '+source+':\n\n'
              txt = txt + explanation + '\n\n'
-             txt = txt + '(je suis [un bot](https://github.com/samthiriot/bot.reddit.bonmots) bienveillant mais en apprentissage; répondez-moi si je me trompe, mon développeur surveille les messages)'
+             txt = txt + '^(Je suis [un bot](https://github.com/samthiriot/bot.reddit.bonmots) bienveillant mais en apprentissage; répondez-moi si je me trompe, mon développeur surveille les messages.)'
              print(txt,'\n\n')
              stats['replies possible'] = stats['replies possible'] + 1 
              publish = not config["readonly"]
@@ -791,6 +830,7 @@ def find_definitions_in_submission(comment):
                             break
                         elif val == 'no':     
                             publish = False
+                            comment.save() # avoids to propose it again
                             break
                         print('?')
                 except KeyboardInterrupt:
@@ -854,7 +894,8 @@ def parse_comment(comment):
     if comment.score < 0:
         return
     # skip if too old
-    age_days = (utc_timestamp - comment.created_utc)/60/60/24
+    age_days = int((utc_timestamp - comment.created_utc)/60/60/24)
+    #print('age of the comment:',int((utc_timestamp - comment.created_utc)/60/60/24),'days')
     if age_days > 10:
         print('too old:',age_days,'days')
     elif comment.saved or (comment.author is not None and comment.author.name == myusername):
@@ -875,26 +916,38 @@ def parse_comment(comment):
     return False
 
 
+def process_submission(submission, i):
+        
+    global stats
+    
+    if submission.locked or submission.hidden or submission.quarantine or submission.num_comments==0:
+        return
+    
+    print("\nTHREAD > ", submission.title,'(',submission.num_comments,'comments)')
+    dt = datetime.datetime.now() 
+    utc_time = dt.replace(tzinfo = timezone.utc) 
+    utc_timestamp = utc_time.timestamp() 
+    for comment in submission.comments:
+        if parse_comment(comment):
+            break
+    
+    i = i + 1
+    if i%50 == 0:
+        print('\n',stats,'\n')
+        
+    stats['posts explored'] = stats['posts explored'] + 1
+
+
+
+
 i = 0
-while True:
-    #for submission in subreddit.stream.submissions():
-    for submission in subreddit.hot(limit=500):
-        if submission.locked or submission.hidden or submission.quarantine or submission.num_comments==0:
-            continue
-        print("\nTHREAD > ", submission.title,'(',submission.num_comments,'comments)')
-        dt = datetime.datetime.now() 
-        utc_time = dt.replace(tzinfo = timezone.utc) 
-        utc_timestamp = utc_time.timestamp() 
-        for comment in submission.comments:
-            if parse_comment(comment):
-                break
-        i = i + 1
-        if i%50 == 0:
-            print('\n',stats,'\n')
-        stats['posts explored'] = stats['posts explored'] + 1
-   
-    print('\n',stats,'\n')
-    print('\nfinished parsing hot messages; will restart in 5 minutes (or Ctrl+C to restart now)')
-    wait(60*5)
+print('\nprocessing hot threads\n\n')
+for submission in subreddit.hot(limit=500):
+    process_submission(submission, i)
+
+print('\n\n', stats,'\n\nprocessing hot threads\n\n')
+
+for submission in subreddit.stream.submissions():
+    process_submission(submission, i)
 
 
