@@ -137,7 +137,7 @@ config_wiktionnaire = dict()
 config_wiktionnaire['templates'] = dict('')
 config_wiktionnaire['templates']['name2text'] = {'m':'_masculin_', 'f':'_féminin_', 'pron':'_pronom_'}
 config_wiktionnaire['templates']['name2alloptions'] = set(['nom w pc'])
-config_wiktionnaire['templates']['name2firstoptions'] = set(['w','petites capitales','pc'])
+config_wiktionnaire['templates']['name2firstoptions'] = set(['w','ws','wq','wsp','petites capitales','pc'])
 config_wiktionnaire['templates']['name2namewithparenthesis'] = set(['vieilli','désuet','ironique','négologisme','injure','péjoratif','vulgaire','familier','raciste','figuré'])
 
 #search_word_wiktionnaire('palmipède')
@@ -273,10 +273,14 @@ def combinaisons_diacritiques(word, changed=0):
         yield ''.join(combination)
     pass
 
-consonnes_doublables = set(['n','r','m','t'])
+consonnes_doublables = set(['n','r','m','t','l','s','p'])
 
 def combinaisons_consonnes(word):
     global consonnes_doublables
+    
+    if len(word) <= 3:
+        yield word
+        return
     
     w = word.lower()
     dic = dict()
@@ -284,15 +288,15 @@ def combinaisons_consonnes(word):
         w = w.replace(letter+letter,letter)
         dic[letter] = [letter, letter+letter]
     
-    possibilities = [ dic.get(letter,[letter]) for letter in w[:-1] ]
+    possibilities = [ dic.get(letter,[letter]) for letter in w[1:-1] ]
     
     for combination in itertools.product(*possibilities):
-        yield ''.join(combination) + w[-1:]
+        yield w[0] + ''.join(combination) + w[-1:]
     
     pass
 
 
-#list(combinaisons_consonnes("maronnier"))
+list(combinaisons_consonnes("maronnier"))
 
 
 def zipf_frequency_of_combinaisons_lower_than(word, threshold):
@@ -392,6 +396,13 @@ def format_wiktionnaire_definition_template_recursive(ast):
             tokens = tl_name.split('/')
             ast.replace(tl, tokens[1]+', _'+tokens[2]+'_, '+tokens[3])
         
+        # specific case of the e template        
+        elif tl_name == 'e':
+            if len(tl.params) > 0:
+                ast.replace(tl, '^('+tl.params[0].value+')')
+            else:
+                ast.replace(tl, '^e')
+        
         # by default, entirely remove the template
         else:
             ast.remove(tl)
@@ -425,6 +436,9 @@ def format_wiktionnaire_definition(definition):
     
     # replace italics, bold and co
     result = substitute_wiki_with_reddit(result)
+    
+    # replace html
+    result = result.replace('<br/>','\n').replace('<br\n/>','\n')
     
     # replace enumerations and examples
     toprocess = result
@@ -498,7 +512,8 @@ def search_word_wiktionnaire(comment, word):
     print('\t',json.dumps(info, sort_keys=True, indent=4))
 
     # if the definition is too short, reject
-    if len(info['bloc_definition']) <= 150:
+    # if a defintion is in ébauche, reject
+    if len(info['bloc_definition']) <= 150 or info['bloc_definition'].count('ébauche-déf') > 0:
         return (False, None, None)        
 
     # if too many definitions, blacklist (too much uncertainty)
@@ -890,6 +905,7 @@ def parse_comment(comment):
     global myusername
     global stats
     if isinstance(comment, MoreComments):
+        print(':', end='')            
         return
     # skip if moderated
     if comment.locked or comment.archived or comment.collapsed or (comment.banned_by is not None):
@@ -913,6 +929,7 @@ def parse_comment(comment):
     # now explore the subcomments!
     for reply in comment.replies:    
         if isinstance(reply, MoreComments):
+            print(':', end='')
             continue
         if parse_comment(reply):
             return True
@@ -930,7 +947,11 @@ def process_submission(submission, i):
     print("\nTHREAD > ", submission.title,'(',submission.num_comments,'comments)')
     dt = datetime.datetime.now() 
     utc_time = dt.replace(tzinfo = timezone.utc) 
-    utc_timestamp = utc_time.timestamp() 
+    utc_timestamp = utc_time.timestamp()
+    # load all the "more comments" of the thread
+    #print('!', end='')
+    submission.comments.replace_more(limit=0)
+    # parse all the comments    
     for comment in submission.comments:
         if parse_comment(comment):
             break
