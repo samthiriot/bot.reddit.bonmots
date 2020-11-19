@@ -137,7 +137,7 @@ config_wiktionnaire = dict()
 config_wiktionnaire['templates'] = dict('')
 config_wiktionnaire['templates']['name2text'] = {'m':'_masculin_', 'f':'_féminin_', 'pron':'_pronom_'}
 config_wiktionnaire['templates']['name2alloptions'] = set(['nom w pc'])
-config_wiktionnaire['templates']['name2firstoptions'] = set(['w'])
+config_wiktionnaire['templates']['name2firstoptions'] = set(['w','petites capitales','pc'])
 
 
 #search_word_wiktionnaire('palmipède')
@@ -418,7 +418,7 @@ def format_wiktionnaire_definition(definition):
     
     # process links
     for wl in ast.filter_wikilinks(recursive=False):
-        ast.replace(wl, str(wl.title))
+        ast.replace(wl, str(wl.title if wl.text is None else wl.text))
     
     # transform AST into text
     result = str(ast)
@@ -497,6 +497,10 @@ def search_word_wiktionnaire(comment, word):
     stats['words found wiktionnaire'] = stats['words found wiktionnaire'] + 1
     print('\t',json.dumps(info, sort_keys=True, indent=4))
 
+    # if the definition is too short, reject
+    if len(info['bloc_definition']) <= 150:
+        return (False, None, None)        
+
     # if too many definitions, blacklist (too much uncertainty)
     if info['count_definitions'] >= 5:
         add_word_rejected_db(word, "too many definitions in wiktionary")
@@ -516,24 +520,23 @@ def search_word_wiktionnaire(comment, word):
         print('\trejecting,',word,'is defined as a sigle in wiktionnaire')
         stats['words rejected wiktionnaire'] = stats['words rejected wiktionnaire'] + 1
         return (True, None, None)
-
+    
+    # how many points from various indicators?
+    points = max(0, 6 - info['count_traductions'])**2 + max(0, 6 - info['count_synonymes']) + max(0, 4 - info['count_derives'])**2 + max(0, 4 - info['count_paronymes'])**2 
+    print('=> points ',points)
+    
     # if the word is of interest, use it :-)
-    if info['argot'] or info['desuet'] or info['vieilli'] or info['rare'] or info['ironique'] or info['familier']:
+    if info['argot'] or info['desuet'] or info['vieilli'] or info['rare'] or info['ironique'] or info['familier'] or info['count_traductions'] <= 5:
         # upvote the comment :-)
         comment.upvote()
-        # TODO process the definition!!!
         stats['words defined wiktionnaire'] = stats['words defined wiktionnaire'] + 1
         explanation = info['bloc_definition']
-        # replace wikilinks by links to wiktionnary
-        #pattern = re.compile('\[\[([\w]+)\]\]')
-        #explanation = pattern.sub('[\\1](https://fr.wiktionary.org/wiki/?term=\\1)', explanation)
-        #explanation = explanation.replace('[[','').replace(']]','')
         explanation = format_wiktionnaire_definition(explanation)
         
         # forge source
         source = '[Wiktionnaire](https://fr.wiktionary.org/wiki/'+quote(info['title'])+')'        
         return (False, explanation, source)
-
+    
     # return nothing
     return (False, None, None)
 
@@ -558,17 +561,18 @@ def search_wikipedia(tok, sentences=1):
         # TODO le plus intelligent serait de trouver la définition la plus pertinente d'après la proximité lexico
         # prenons déjà la première
         options = [ s for s in e.options if s != tok and len(s)>0]
-        print('\tWikipedia en propose les définitions suivantes: ', e.options, 'et donc la première:',options[0],'\n\n')
-        for option in options:
-            if len(option) < 3: 
-                continue
-            # certaines solutions mènent à des erreurs; on boucle et on prend la première solution qui ne plante pas
-            try:
-                page_info = wikipedia.page(option, auto_suggest=False, redirect=True)
-                tok = option
-                break
-            except:
-                pass
+        if len(options) > 0:
+            print('\tWikipedia en propose les définitions suivantes: ', e.options, 'et donc la première:',options[0],'\n\n')
+            for option in options:
+                if len(option) < 3: 
+                    continue
+                # certaines solutions mènent à des erreurs; on boucle et on prend la première solution qui ne plante pas
+                try:
+                    page_info = wikipedia.page(option, auto_suggest=False, redirect=True)
+                    tok = option
+                    break
+                except:
+                    pass
     except:
         pass
     
@@ -802,7 +806,7 @@ def find_definitions_in_submission(comment):
             (blocksearch, explanation, source) = search_urban_dictionary(token)
         
         if explanation is not None:
-             print('\n\n', ''.join(['https://reddit.com/',comment.permalink]), '\n', '_________________________________________________________\n\n', body, '\n\n---------------------------------------\n\n')
+             print('\n\n', ''.join(['https://reddit.com',comment.permalink]), '\n', '_________________________________________________________\n\n', body, '\n\n---------------------------------------\n\n')
              qualif = random.choice(['très rare','peu connu']) if lexeme.vector_norm == 0 else random.choice(['plutôt rare','assez rare','peu courant','inusité'])
              txt = ''
              if len(body) > len(token.sent.text)*2:
@@ -939,15 +943,16 @@ def process_submission(submission, i):
 
 
 
+if __name__ == "__main__":
+    
+    i = 0
+    print('\nprocessing hot threads\n\n')
+    for submission in subreddit.hot(limit=500):
+        process_submission(submission, i)
 
-i = 0
-print('\nprocessing hot threads\n\n')
-for submission in subreddit.hot(limit=500):
-    process_submission(submission, i)
+    print('\n\n', stats,'\n\nprocessing hot threads\n\n')
 
-print('\n\n', stats,'\n\nprocessing hot threads\n\n')
-
-for submission in subreddit.stream.submissions():
-    process_submission(submission, i)
+    for submission in subreddit.stream.submissions():
+        process_submission(submission, i)
 
 
