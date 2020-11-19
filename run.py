@@ -138,7 +138,7 @@ config_wiktionnaire['templates'] = dict('')
 config_wiktionnaire['templates']['name2text'] = {'m':'_masculin_', 'f':'_féminin_', 'pron':'_pronom_'}
 config_wiktionnaire['templates']['name2alloptions'] = set(['nom w pc'])
 config_wiktionnaire['templates']['name2firstoptions'] = set(['w','petites capitales','pc'])
-
+config_wiktionnaire['templates']['name2namewithparenthesis'] = set(['vieilli','désuet','ironique','négologisme','injure','péjoratif','vulgaire','familier','raciste','figuré'])
 
 #search_word_wiktionnaire('palmipède')
 
@@ -368,7 +368,7 @@ def format_wiktionnaire_definition_template_recursive(ast):
             ast.replace(tl, config_wiktionnaire['templates']['name2text'][tl_name])
         
         # replace tags starting or finishing with something by their content 
-        elif tl_name.endswith('rare') or tl_name.startswith('argot'):
+        elif tl_name.endswith('rare') or tl_name.startswith('argot') or tl_name in config_wiktionnaire['templates']['name2namewithparenthesis']:
             ast.replace(tl, '_('+tl_name+')_')
         
         # replace content of source
@@ -435,7 +435,7 @@ def format_wiktionnaire_definition(definition):
         # treat enumerations and examples                
         if letter == '*' and before is not None and before == '#':
             # we are in an example
-            result = result + '\n> '
+            result = result + '\n  - '
         elif before == '#' and letter.isspace():
             current_enumeration = current_enumeration + 1
             result = result + '\n'+str(current_enumeration)+'. '
