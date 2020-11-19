@@ -39,7 +39,7 @@ reddit = praw.Reddit(
     password=config['reddit']['password'] 
 )
 # the subreddit we will monitor and reply to
-subreddit = reddit.subreddit("france")
+subreddit = reddit.subreddit("france+zetetique+francophonie") # +jardin
 print('\twill monitor comments of reddits: ',subreddit.display_name)
 # the subreddit we use to know if a term is frequent or not
 allreddit = reddit.subreddit("france+news+europe")
@@ -449,7 +449,7 @@ def format_wiktionnaire_definition(definition):
         # treat enumerations and examples                
         if letter == '*' and before is not None and before == '#':
             # we are in an example
-            result = result + '\n  - '
+            result = result + '\n    - '
         elif before == '#' and letter.isspace():
             current_enumeration = current_enumeration + 1
             result = result + '\n'+str(current_enumeration)+'. '
@@ -917,7 +917,7 @@ def parse_comment(comment):
     age_days = int((utc_timestamp - comment.created_utc)/60/60/24)
     #print('age of the comment:',int((utc_timestamp - comment.created_utc)/60/60/24),'days')
     if age_days > 10:
-        print('too old:',age_days,'days')
+        print(',', end='')
     elif comment.saved or (comment.author is not None and comment.author.name == myusername):
         # we probably worked on it already!
         return
@@ -944,7 +944,7 @@ def process_submission(submission, i):
     if submission.locked or submission.hidden or submission.quarantine or submission.num_comments==0:
         return
     
-    print("\nTHREAD > ", submission.title,'(',submission.num_comments,'comments)')
+    print("\nr/",submission.subreddit.display_name , " > ", submission.title,' (',submission.num_comments,' comments)',sep='')
     dt = datetime.datetime.now() 
     utc_time = dt.replace(tzinfo = timezone.utc) 
     utc_timestamp = utc_time.timestamp()
