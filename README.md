@@ -34,6 +34,7 @@ Chaque mot peut ensuite être rejeté si:
   * a au moins une définition injurieuse ou raciste
   * est défini comme un sigle
 * le mot est trouvé plus de 5 fois sur les reddits [r/france](https://www.reddit.com/r/france/), [r/europe](https://www.reddit.com/r/europe/) ou [r/news](https://www.reddit.com/r/news/), ce qui l'identifie comme un terme d'usage contemporain courant (par exemple "COVID" ne fait pas partie des corpus linguistiques mais ne doit pas être défini)
+* le mot est trouvé plus de 5 fois sur [Linguee](https://www.linguee.com/)
 * le mot est trouvé sur [Wikipedia](https://fr.wikipedia.org/):
   * mais redirige vers un mot dont la fréquence linguistique est élevée ([rang-fréquence de Zipf](https://fr.wikipedia.org/wiki/Loi_de_Zipf) supérieur à 1.5)
   * mais est associé à une catégorie en liste noire, dont: page en ébauche; page controversée; page portant sur des produits informatiques
