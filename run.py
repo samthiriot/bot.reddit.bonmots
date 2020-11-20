@@ -5,6 +5,8 @@ import itertools
 
 import re
 
+from stats import *
+
 from datetime import timezone 
 import datetime 
 
@@ -55,100 +57,19 @@ if not myprofile.verified:
 print('\tcomment-karma:\t', myprofile.comment_karma,    '\t:-(' if myprofile.comment_karma < 0 else '\t:-)')
 print('\ttotal karma:\t',   myprofile.total_karma,      '\t:-(' if myprofile.total_karma < 0 else '\t:-)')
 
-print("init: connecting terms database")
+from usedb import *
 
-import sqlite3
-conn = sqlite3.connect('terms.db')
-c = conn.cursor()
-c.execute('''CREATE TABLE IF NOT EXISTS rejected (word TEXT PRIMARY KEY, reason TEXT)''')
-conn.commit()
-c.execute('''SELECT COUNT(*) FROM rejected''')
-print("\tthere are",c.fetchone()[0],"words blocked in database")
-c.execute('''SELECT reason, COUNT(*) FROM rejected GROUP BY reason''')
-for row in c.fetchall():
-    print('\t\t',row[0],':\t',row[1])
+from usewiktionnaire import *
 
-from lru import LRU
-cache_rejected = LRU(50000)
-# fill in the cache with entries
-c.execute('''SELECT * FROM rejected ORDER BY RANDOM() LIMIT ?''', (int(cache_rejected.get_size()*2/3),))
-for row in c:
-    cache_rejected[row[0]]=row[1]
-print("\tloaded",len(cache_rejected),"items in cache")
-
-def is_word_rejected_db(token):
-    global c
-    global stats
-    global cache_rejected
-    
-    # first try the cache
-    if token.lemma_ in cache_rejected:
-        stats['words rejected db (cache)'] = stats['words rejected db (cache)'] + 1
-        return cache_rejected[token.lemma_]
-    if token.text in cache_rejected:
-        stats['words rejected db (cache)'] = stats['words rejected db (cache)'] + 1
-        return cache_rejected[token.text]
-    
-    #print("searching db for word",word)
-    stats['words searched db'] = stats['words searched db'] + 1
-    c.execute('SELECT * FROM rejected WHERE word=? OR word=? ', (token.lemma_,token.text,))
-    row = c.fetchone()
-    if row is None:
-        return None    
-    else:
-        reason = row[1]
-        # add to cache
-        cache_rejected[word.lemma_] = reason
-        #print("word ",word," is rejected in db because",reason)
-        return reason
-
-def add_word_rejected_db(word, reason):
-    global c
-    global cache_rejected
-    # add to cache
-    cache_rejected[word] = reason
-    try:
-        c.execute('INSERT INTO rejected VALUES (?,?)', (word, reason))
-        conn.commit()
-    except sqlite3.IntegrityError as e:
-        print(e)
-        pass
-
-
-print("init: wiktionary database")
-wiktionnaire_conn = sqlite3.connect('./sources/wiktionnaire/wiktionnaire.sqlite')
-wiktionnaire_cursor = wiktionnaire_conn.cursor()
-wiktionnaire_cursor.execute('''SELECT COUNT(*) FROM definitions''')
-print("\tthere are",wiktionnaire_cursor.fetchone()[0],"definitions from wiktionnaire")
-
-def get_word_wiktionnaire(word):
-    global wiktionnaire_cursor
-    wiktionnaire_cursor.execute('SELECT * FROM definitions WHERE title=?', (word,))
-    row = wiktionnaire_cursor.fetchone()
-    if row is None:
-        return None    
-    else:
-        return dict(zip([c[0] for c in wiktionnaire_cursor.description], row))       
-
-
-import mwparserfromhell
-
-config_wiktionnaire = dict()
-config_wiktionnaire['templates'] = dict('')
-config_wiktionnaire['templates']['name2text'] = {'m':'_masculin_', 'f':'_féminin_', 'pron':'_pronom_'}
-config_wiktionnaire['templates']['name2alloptions'] = set(['nom w pc'])
-config_wiktionnaire['templates']['name2firstoptions'] = set(['w','ws','wq','wsp','petites capitales','pc'])
-config_wiktionnaire['templates']['name2namewithparenthesis'] = set(['vieilli','désuet','ironique','négologisme','injure','péjoratif','vulgaire','familier','raciste','figuré'])
-
-#search_word_wiktionnaire('palmipède')
-
+from uselinguee import *
 
 print("init: loading spacy french models")
 import spacy
 # https://spacy.io/models/fr
 #nlp = spacy.load("fr")
 #nlp = spacy.load("fr_core_news_sm") => no word vectors...
-nlp = spacy.load("fr_core_news_md")     # this model is big enough to have vectors
+#nlp = spacy.load("fr_core_news_md")     # this model is big enough to have vectors
+nlp = spacy.load("fr_core_news_lg")     # ideal, as it has probabilities
 
 print("\tloaded",len(nlp.vocab.strings),"words, ",len(nlp.vocab.vectors), "vectors")
 
@@ -175,12 +96,8 @@ print("\tinstalled custom tokenizer")
 print("init: loading word frequency")
 import wordfreq
 
-print("init: wikipedia API")
-import wikipedia
-wikipedia.set_lang('fr')
-# TODO shift to https://www.mediawiki.org/wiki/Manual:Pywikibot
-
-wikipedia_blacklisted_categories = set(['informatique','commune','ébauche'])
+# load our wikipedia code
+from usewikipedia import *
 
 # TODO académie française
 # ici! https://www.cnrtl.fr/definition/gougnafier
@@ -202,38 +119,6 @@ print("init: done\n\n")
 # TODO introspection, vérifier résultat: mémoriser où on a posté, aller voir de temps en temps (les plus anciens?) messages et mettre à jour les votes
 
 
-stats = dict()
-stats['posts explored'] = 0
-stats['comments parsed'] = 0
-stats['words parsed'] = 0
-stats['words rejected blacklist'] = 0
-stats['words rejected linked'] = 0          # how many words were rejected because they were explained in a weblink already?
-stats['words searched db'] = 0
-stats['words rejected length'] = 0
-stats['words rejected names'] = 0
-stats['words rejected frequency'] = 0
-stats['words rejected exclamation'] = 0
-stats['words searched reddit'] = 0
-stats['words rejected reddit'] = 0
-stats['words rejected db'] = 0
-stats['words rejected db (cache)'] = 0
-stats['words searched'] = 0
-stats['words searched wikipedia'] = 0
-stats['words rejected wikipedia'] = 0
-stats['words searched Urban Dictionary'] = 0
-stats['words found wikipedia'] = 0
-stats['words found Urban Dictionary'] = 0
-stats['words without definition'] = 0
-
-stats['words searched wiktionnaire'] = 0
-stats['words found wiktionnaire'] = 0
-stats['words rejected wiktionnaire'] = 0
-stats['words defined wiktionnaire'] = 0
-
-stats['replies possible'] = 0
-stats['replies posted'] = 0
-stats['ratelimit reddit reply'] = 0
-
 blacklist = set([
                 "upvote","upvoter",
                 "downvote","downvoter",
@@ -246,76 +131,8 @@ blacklist = set([
                 "covid","déconfinement","chloroquinine","reconfinement","confinement"
                 ])
 
-accentspossibles = dict()
-accentspossibles['a'] = ['a','à','ä']
-accentspossibles['e'] = ['e','é','è','ê','ë']
-accentspossibles['è'] = ['è','é','e','ê']
-accentspossibles['é'] = ['é','è','e','ê']
-accentspossibles['i'] = ['i','î','ï','y']
-accentspossibles['î'] = ['î','i']
-accentspossibles['o'] = ['o','ô','ö']
-accentspossibles['u'] = ['u','ù','û','ü']
-accentspossibles['y'] = ['y','ÿ','i']
-accentspossibles['c'] = ['c','ç']
+from variations import * 
 
-def combinaisons_diacritiques(word, changed=0):
-    global accentspossibles
-    cards = [len(accentspossibles.get(letter,[letter])) for letter in word]
-    max_cards = max(cards)
-    max_tests = max_cards ** 2 * len(word)
-    # generate the lists of possible combinations
-    possibilities = [ accentspossibles.get(letter,[letter]) for letter in word ]
-    i = 0
-    for combination in itertools.product(*possibilities):
-        i = i + 1
-        if i >= max_tests:
-            break
-        yield ''.join(combination)
-    pass
-
-consonnes_doublables = set(['n','r','m','t','l','s','p'])
-
-def combinaisons_consonnes(word):
-    global consonnes_doublables
-    
-    if len(word) <= 3:
-        yield word
-        return
-    
-    w = word.lower()
-    dic = dict()
-    for letter in consonnes_doublables:
-        w = w.replace(letter+letter,letter)
-        dic[letter] = [letter, letter+letter]
-    
-    possibilities = [ dic.get(letter,[letter]) for letter in w[1:-1] ]
-    
-    for combination in itertools.product(*possibilities):
-        yield w[0] + ''.join(combination) + w[-1:]
-    
-    pass
-
-
-list(combinaisons_consonnes("maronnier"))
-
-
-def zipf_frequency_of_combinaisons_lower_than(word, threshold):
-    '''
-    returns the first value having a zipf frequency exceeding the threshold,
-    or the highest zipf frequency
-    '''
-    _max = 0
-    #print('\nzipf frequency of',word,'?') #élèment            
-    for d1 in combinaisons_consonnes(word.lower()):
-        for d in combinaisons_diacritiques(d1): 
-            #print(d, end=' ')
-            f = wordfreq.zipf_frequency(d,'fr')
-            if f >= threshold:
-                return f
-            if f > _max:
-                _max = f
-    #print()
-    return _max
 
 
 def wait(seconds):
@@ -323,6 +140,7 @@ def wait(seconds):
         time.sleep(seconds)
     except KeyboardInterrupt:
         return
+
 
 def reddit_results_highter_than(word, threshold):
     '''
@@ -343,302 +161,6 @@ def reddit_results_highter_than(word, threshold):
             return threshold
     print("\tterm",word,"found ",count,"times")
     return count
-
-
-def substitute_wiki_with_reddit(txt):
-    
-    result = txt
-    
-    # replace bold+italic
-    result = result.replace("'''''","___")
-    # replace bold
-    result = result.replace("'''","__")
-    # replace italic
-    result = result.replace("''","_")
-    
-    return result
-
-def format_wiktionnaire_definition_template_recursive(ast):
-    
-    global config_wiktionnaire
-    
-    for tl in ast.filter_templates(recursive=False):
-        
-        tl_name = str(tl.name)
-        #print('processing template', tl_name)
-        
-        # replace content of templates with a constant text
-        if tl_name in config_wiktionnaire['templates']['name2text']:
-            ast.replace(tl, config_wiktionnaire['templates']['name2text'][tl_name])
-        
-        # replace tags starting or finishing with something by their content 
-        elif tl_name.endswith('rare') or tl_name.startswith('argot') or tl_name in config_wiktionnaire['templates']['name2namewithparenthesis']:
-            ast.replace(tl, '_('+tl_name+')_')
-        
-        # replace content of source
-        elif tl_name == 'source':
-            ast.replace(tl, ' ^('+str(format_wiktionnaire_definition_template_recursive(tl.params[0].value))+')')
-        
-        # replace with the content of the first option
-        elif tl_name in config_wiktionnaire['templates']['name2firstoptions']:
-            ast.replace(tl, str(format_wiktionnaire_definition_template_recursive(tl.params[0].value)))
-        
-        # replace with name:option[0]
-        elif tl_name in set(['ISBN']):
-            ast.replace(tl, tl_name+':'+str(format_wiktionnaire_definition_template_recursive(tl.params[0].value)))
-        
-        # replace template with the concatenation of all the options
-        elif tl_name in config_wiktionnaire['templates']['name2alloptions']:
-            ast.replace(tl, ' '.join( str(format_wiktionnaire_definition_template_recursive(p.value)) for p in tl.params ) )
-        
-        # remplace Citations
-        elif tl_name.startswith('Citation'):
-            tokens = tl_name.split('/')
-            ast.replace(tl, tokens[1]+', _'+tokens[2]+'_, '+tokens[3])
-        
-        # specific case of the e template        
-        elif tl_name == 'e':
-            if len(tl.params) > 0:
-                ast.replace(tl, '^('+tl.params[0].value+')')
-            else:
-                ast.replace(tl, '^e')
-        
-        # by default, entirely remove the template
-        else:
-            ast.remove(tl)
-            print('mediawiki: ignoring template', tl_name)
-    
-    return ast
-
-
-def format_wiktionnaire_definition(definition):
-    global config_wiktionnaire
-    
-    result = ''
-    
-    ast = mwparserfromhell.parse(definition, skip_style_tags=True)
-    
-    # replace any comment
-    for wc in ast.filter_comments():
-        ast.remove(wc)
-    
-    # process style
-    
-    # process templates
-    format_wiktionnaire_definition_template_recursive(ast)
-    
-    # process links
-    for wl in ast.filter_wikilinks(recursive=False):
-        ast.replace(wl, str(wl.title if wl.text is None else wl.text))
-    
-    # transform AST into text
-    result = str(ast)
-    
-    # replace italics, bold and co
-    result = substitute_wiki_with_reddit(result)
-    
-    # replace html
-    result = result.replace('<br/>','\n').replace('<br\n/>','\n')
-    
-    # replace enumerations and examples
-    toprocess = result
-    result = ''    
-    current_enumeration = 0
-    before = None
-    for letter in toprocess:
-        # treat enumerations and examples                
-        if letter == '*' and before is not None and before == '#':
-            # we are in an example
-            result = result + '\n    - '
-        elif before == '#' and letter.isspace():
-            current_enumeration = current_enumeration + 1
-            result = result + '\n'+str(current_enumeration)+'. '
-        elif not letter in set(['#']):
-            result = result + letter 
-        before = letter
-    
-    return result
-
-
-deftest = """{{fr-rég|}}
-'''laudation''' {{pron||fr}} {{f}}
-# {{rare|fr}} louange|Louange, éloge.
-#* ''Il est vraisemblable que, lors de la '''laudation''' que nous venons de rapporter, Girard de Cossonay n’était plus vivant.'' {{source|''Mémoires et documents'', Société d’histoire de la Suisse romande, 1858}}
-"""
-#print(format_wiktionnaire_definition(deftest))
-
-
-
-deftest = """{{fr-rég|pa.ne.ʒi.ʁik}}
-'''panégyrique''' {{pron|pa.ne.ʒi.ʁik|fr}} {{m}}
-# [[discours|Discours]] [[public]] [[faire|fait]] à la [[louange]] de [[quelqu’un]] ou de [[quelque chose]], [[éloge]].
-#* ''Ô crime ! ô honte ! La tribune du peuple français a retenti du '''panégyrique''' de Louis XVI ; nous avons entendu vanter les vertus et les bienfaits du tyran !'' {{source|{{w|Maximilien Robespierre}}, ''Sur le parti de prendre à l’égard de Louis XVI'', novembre 1792}}
-#* ''L’un célébrait les louanges d’Athelsthane dans un '''panégyrique '''lugubre ; un autre redisait, dans un poème généalogique en langue saxonne, les noms étrangement durs et sauvages de ses nobles ancêtres.'' {{source|{{Citation/Walter Scott/Ivanhoé/1820}}}}
-#* ''Pendant que des regrets unanimes se formulaient à la Bourse, sur le port, dans toutes les maisons ; quand le '''panégyrique''' d’un homme irréprochable, honorable et bienfaisant, remplissait toutes les bouches, Latournelle et Dumay, […], vendaient, réalisaient, payaient et liquidaient.'' {{source|{{Citation/Honoré de Balzac/Modeste Mignon/1855}}}}
-#* ''Un colonel ventripotent lit, trémolos dans la voix, un '''panégyrique''' de l’État ouvrier et paysan.'' {{source|{{nom w pc|Olivier|Guez}} et {{nom w pc|Jean-Marc|Gonin}}, ''{{w|La Chute du Mur}}'', {{w|Le Livre de Poche}}, 2011, {{ISBN|978-2-253-13467-1}}}}
-"""
-#print(format_wiktionnaire_definition(deftest))
-
-deftest = """{{fr-rég|ɲuf}}
-'''gnouf''' {{pron|ɲuf|fr}} {{m}}
-# {{argot|fr}} {{lexique|prison|fr}} [[prison|Prison]], poste de [[police]].
-#* ''C’est tellement vite fait de se retrouver au '''gnouf''' !'' {{source|[[w:Jean Guy Le Dano|Jean Guy Le Dano]], ''La mouscaille'', Flammarion, 1973, page 69}}
-#* ''Arrivé dans un garage soupçonné de carambouilles, au moment d’une rafle organisée par la police, il a été embarqué sans discernement, allez, tout le monde au '''gnouf''' !'' {{source|Jean Raje, ''L’encabané, au pays du droit des hommes'', Société des Écrivains, 2007, page 30}}
-# {{argot militaire|fr}} {{en particulier}} Prison [[militaire]].
-#* ''Jeannet, dans son dernier mois de service, s'était fait arracher ses brisques et mettre au '''gnouf''' après une altercation avec son capitaine.'' {{source|{{w|Hervé Bazin}}, {{w|''Cri de la chouette''}}, Grasset, 1972, réédition Le Livre de Poche, page 93}}"""
-
-#print(format_wiktionnaire_definition(deftest))
-
-deftest = """{{fr-r\u00e9g|\u0281a.s\u0254}}\n'''rasso''' {{pron|\u0281a.s\u0254|fr}} {{m}}\n# [[rassemblement|Rassemblement]] d\u2019amateurs de [[tuning]].\n#* ''Les rassemblements (ou \u00ab '''rassos''' \u00bb) occupent les parkings des hypermarch\u00e9s les soirs de week-end : on s\u2019y rencontre entre amateurs pour \u00e9changer pi\u00e8ces, bons plans et conseils, et pour s\u2019\u00e9clater entre potes.'' {{source|St\u00e9phanie {{pc|Maurice}}, ''La passion du tuning'', Seuil, 2015, coll. Raconter la vie, page 8}}"""
-
-#print(format_wiktionnaire_definition(deftest))
-
-
-
-def search_word_wiktionnaire(comment, word):
-    
-    global stats
-
-    print('searching wiktionnaire', word)
-    stats['words searched wiktionnaire'] = stats['words searched wiktionnaire'] + 1
-
-    info = get_word_wiktionnaire(word)
-
-    # if not in Wiktionary
-    if info is None:
-        return (False, None, None)
-
-    stats['words found wiktionnaire'] = stats['words found wiktionnaire'] + 1
-    print('\t',json.dumps(info, sort_keys=True, indent=4))
-
-    # if the definition is too short, reject
-    # if a defintion is in ébauche, reject
-    if len(info['bloc_definition']) <= 150 or info['bloc_definition'].count('ébauche-déf') > 0:
-        return (False, None, None)        
-
-    # if too many definitions, blacklist (too much uncertainty)
-    if info['count_definitions'] >= 5:
-        add_word_rejected_db(word, "too many definitions in wiktionary")
-        print('\trejecting,',word,'too many definition (',str(info['count_definitions'])+') in wiktionnaire')
-        stats['words rejected wiktionnaire'] = stats['words rejected wiktionnaire'] + 1
-        return (True, None, None)
-
-    if info['injure'] or info['raciste']:
-        stats['words rejected wiktionnaire'] = stats['words rejected wiktionnaire'] + 1
-        print('this comment contains injurial stuff:\n',comment.body)
-        print('\trejecting,',word,'is defined as injurial in wiktionnaire')
-        add_word_rejected_db(word, "defined as injurial in wiktionary")
-        return (True, None, None)
-
-    if info['sigle']:
-        add_word_rejected_db(word, "defined as a sigle in wiktionary")
-        print('\trejecting,',word,'is defined as a sigle in wiktionnaire')
-        stats['words rejected wiktionnaire'] = stats['words rejected wiktionnaire'] + 1
-        return (True, None, None)
-    
-    # how many points from various indicators?
-    points = max(0, 6 - info['count_traductions'])**2 + max(0, 6 - info['count_synonymes']) + max(0, 4 - info['count_derives'])**2 + max(0, 4 - info['count_paronymes'])**2 
-    print('=> points ',points)
-    
-    # if the word is of interest, use it :-)
-    if info['argot'] or info['desuet'] or info['vieilli'] or info['rare'] or info['ironique'] or info['familier'] or info['count_traductions'] <= 5:
-        # upvote the comment :-)
-        comment.upvote()
-        stats['words defined wiktionnaire'] = stats['words defined wiktionnaire'] + 1
-        explanation = info['bloc_definition']
-        explanation = format_wiktionnaire_definition(explanation)
-        
-        # forge source
-        source = '[Wiktionnaire](https://fr.wiktionary.org/wiki/'+quote(info['title'])+')'        
-        return (False, explanation, source)
-    
-    # return nothing
-    return (False, None, None)
-
-
-blacklisted_wikipedia = ['jeu', 'application', 'marque']
-
-def search_wikipedia(tok, sentences=1):
-    global stats
-    global blacklisted_wikipedia
-    global wikipedia_blacklisted_categories
-    #found = wikipedia.search("brantes")
-    explanation = None
-    source = None
-    page_info = None
-    try:
-        print("searching wikipedia for ", tok)
-        stats['words searched wikipedia'] = stats['words searched wikipedia'] + 1
-        # load the page
-        page_info = wikipedia.page(tok, auto_suggest=False, redirect=True) # TODO auto_suggest?
-    except wikipedia.exceptions.DisambiguationError as e:
-        # il y a plus solutions
-        # TODO le plus intelligent serait de trouver la définition la plus pertinente d'après la proximité lexico
-        # prenons déjà la première
-        options = [ s for s in e.options if s != tok and len(s)>0]
-        if len(options) > 0:
-            print('\tWikipedia en propose les définitions suivantes: ', e.options, 'et donc la première:',options[0],'\n\n')
-            for option in options:
-                if len(option) < 3: 
-                    continue
-                # certaines solutions mènent à des erreurs; on boucle et on prend la première solution qui ne plante pas
-                try:
-                    page_info = wikipedia.page(option, auto_suggest=False, redirect=True)
-                    tok = option
-                    break
-                except:
-                    pass
-    except:
-        pass
-    
-    # we searched for definitions
-    if page_info is None:
-        # we did not found any definition...
-        # TODO add to a Wikipedia cache so we don't query it again and again
-        return (False, None, None)
-    
-    # so we found a page which seems of interest.
-    # let's load more info about it
-    
-    # we have a title of a page. Is that word very common?
-    if wordfreq.zipf_frequency(page_info.title,'fr') > 3 or wordfreq.zipf_frequency(page_info.title,'en') > 3:
-        print("\twikipedia redirected",tok,"to",page_info.title, "which is very frequent")
-        add_word_rejected_db(tok, "wikipedia redirects to a frequent word")
-        return (True, None, None)
-        
-    # filter based on categories?
-    for blacklisted_category in wikipedia_blacklisted_categories:
-        if any(blacklisted_category in categorie.lower() for categorie in page_info.categories):
-            print("\nthe wikipedia article ",page_info.title," is about ",blacklisted_category,", reject it")
-            return (False, None, None)
-
-    # load the summary   
-    explanation = page_info.summary
-    # emphasis the word defined
-    explanation = explanation.replace(' '+tok+' ',' _'+tok+'_ ')
-    # replace weird punctuation
-    explanation = explanation.replace(', ,',',').replace(', :', ':').replace(',.','.').replace(',:',':')
-    # skip lines visibly
-    explanation = explanation.replace('\n','\n\n')
-
-    source = '[Wikipedia](https://fr.wikipedia.org/wiki/'+quote(page_info.title)+')'
-    
-    # so we found a definition
-    # a too short explanation might require more sentences
-    if len(explanation) < 20:
-        return search_wikipedia(tok, sentences=sentences+1)
-    
-    # do not accept several specific words
-    if any(blacklisted_word in explanation.lower() for blacklisted_word in blacklisted_wikipedia):
-        print("\n\n!!! rejected word",tok,"in wikipedia because it matches one of blacklisted concepts (",blacklisted_wikipedia,")\n\n")
-        stats['words rejected wikipedia'] = stats['words rejected wikipedia'] + 1
-        add_word_rejected_db(tok, "blacklisted concept in wikipedia")
-        return (True, None, None)
-    
-    # we accept this definition and return it
-    stats['words found wikipedia'] = stats['words found wikipedia'] + 1
-    return (False, explanation, source)
-
 
 
 def search_urban_dictionary(token):
@@ -796,9 +318,17 @@ def find_definitions_in_submission(comment):
             add_word_rejected_db(token.lemma_, "more than 10 reddit results")
             continue
         
+        count_linguee = search_word_linguee(token.lemma_)
+        print('\tcount for linguee:',count_linguee)
+        if count_linguee >= 5:
+            print('\tword frequent in Linguee')
+            add_word_rejected_db(token.lemma_, "more than 5 linguee results")
+            continue
+        
         # gather information from our corpus
         lexeme = nlp.vocab[token.lemma_]
-        print("\nsearching for ", token.text, ", lemma:", token.lemma_, "has_vector=", lexeme.has_vector, ", vector_norm=", lexeme.vector_norm, ", tag=", token.tag_)
+        l2norm = max(nlp.vocab[token.lemma_].vector_norm, nlp.vocab[token.text].vector_norm)
+        print("\nsearching for ", token.text, ", lemma:", token.lemma_, "has_vector=", lexeme.has_vector, ", zf=",zf,", vector_norm=", l2norm, ", tag=", token.tag_)
         stats['words searched'] = stats['words searched'] + 1
         nbsearched = nbsearched + 1
         explanation = None
@@ -828,7 +358,7 @@ def find_definitions_in_submission(comment):
                 # this is a long message, let's quote the sentence
                 txt = txt + '> '+token.sent.text.replace('\n','\n> ')+'\n\n'
              txt = txt + '*'+token.text+'* est un mot '+qualif+' en Français ! J\'en ai '+random.choice(['trouvé','déniché'])+' une définition sur '+source+':\n\n'
-             txt = txt + explanation + '\n\n'
+             txt = txt + explanation + '\n\n___\n\n'
              txt = txt + '^(Je suis) ^[un](https://github.com/samthiriot/bot.reddit.bonmots) ^[bot](https://github.com/samthiriot/bot.reddit.bonmots) ^(bienveillant mais en apprentissage; répondez-moi si je me trompe, mon développeur surveille les messages.)'
              print(txt,'\n\n')
              stats['replies possible'] = stats['replies possible'] + 1 
@@ -970,12 +500,16 @@ def process_submission(submission):
 if __name__ == "__main__":
     i=0
     print('\nprocessing hot threads\n\n')
-    for submission in subreddit.rising(): #hot(limit=500):
+    for submission in subreddit.hot(limit=500):
         process_submission(submission)
-
-    print('\n\n', stats,'\n\nprocessing hot threads\n\n')
+    
+    print('\n\n', stats,'\n\nprocessing comments\n\n')
     i=0
-    for submission in subreddit.stream.submissions():
-        process_submission(submission)
-
+    for comment in subreddit.stream.comments():
+        parse_comment(comment)
+        # display stats from time to time
+        i = i + 1
+        if i%100 == 0:
+            print('\n',stats,'\n')
+     
 

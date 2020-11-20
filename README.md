@@ -87,7 +87,7 @@ Un second problème est d'*identifier des définitions pertinentes*:
 # setup 
 
 ```
-pip3 install lru-dict wikipedia spacy json praw sqlite3 wordfreq urbandictionary mwparserfromhell
+pip3 install lru-dict wikipedia spacy json praw sqlite3 wordfreq urbandictionary mwparserfromhell itertools requests bs4
 python3 -m spacy download fr_core_news_md
 ```
 
