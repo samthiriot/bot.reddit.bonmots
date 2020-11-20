@@ -937,9 +937,12 @@ def parse_comment(comment):
     return False
 
 
-def process_submission(submission, i):
+i = 0
+
+def process_submission(submission):
         
     global stats
+    global i
     
     if submission.locked or submission.hidden or submission.quarantine or submission.num_comments==0:
         return
@@ -965,15 +968,14 @@ def process_submission(submission, i):
 
 
 if __name__ == "__main__":
-    
-    i = 0
+    i=0
     print('\nprocessing hot threads\n\n')
-    for submission in subreddit.hot(limit=500):
-        process_submission(submission, i)
+    for submission in subreddit.rising(): #hot(limit=500):
+        process_submission(submission)
 
     print('\n\n', stats,'\n\nprocessing hot threads\n\n')
-
+    i=0
     for submission in subreddit.stream.submissions():
-        process_submission(submission, i)
+        process_submission(submission)
 
 
