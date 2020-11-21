@@ -41,7 +41,7 @@ reddit = praw.Reddit(
     password=config['reddit']['password'] 
 )
 # the subreddit we will monitor and reply to
-subreddit = reddit.subreddit("france+zetetique+francophonie") # +jardin
+subreddit = reddit.subreddit("france") # +zetetique+francophonie+jardin
 print('\twill monitor comments of reddits: ',subreddit.display_name)
 # the subreddit we use to know if a term is frequent or not
 allreddit = reddit.subreddit("france+news+europe")
@@ -59,9 +59,18 @@ print('\ttotal karma:\t',   myprofile.total_karma,      '\t:-(' if myprofile.tot
 
 from usedb import *
 
+
+# load my past contributions
+#print('loading our past contributions...')
+#for comment in myprofile.comments.hot(limit=10000):
+#    print('\t',comment.subreddit.display_name, comment.permalink)
+#    remember_I_contributed(comment.subreddit.display_name, comment.submission.id, comment.parent_id, comment.id, None, None, comment.permalink)
+
+
 from usewiktionnaire import *
 
 from uselinguee import *
+from useyahoo import *
 
 print("init: loading spacy french models")
 import spacy
@@ -322,7 +331,16 @@ def find_definitions_in_submission(comment):
         print('\tcount for linguee:',count_linguee)
         if count_linguee >= 5:
             print('\tword frequent in Linguee')
-            add_word_rejected_db(token.lemma_, "more than 5 linguee results")
+            # TODO add stat
+            add_word_rejected_db(token.lemma_, "more than 5 Linguee results")
+            continue
+        
+        count_yahoo = search_word_yahoo(token.lemma_, token.text)
+        print('\tcount for yahoo:',count_yahoo)
+        if count_yahoo >= 8000:
+            print('\tword frequent in Yahoo')
+            # TODO add stat
+            add_word_rejected_db(token.lemma_, "more than 8000 Yahoo results")
             continue
         
         # gather information from our corpus
@@ -346,6 +364,7 @@ def find_definitions_in_submission(comment):
         if not blocksearch and explanation is None and token.text.lower() != token.lemma_.lower():
             (blocksearch, explanation, source) = search_wikipedia(token.lemma_)
 
+        
         # search Urban Dictionary
         if not blocksearch and explanation is None:
             (blocksearch, explanation, source) = search_urban_dictionary(token)
@@ -391,6 +410,15 @@ def find_definitions_in_submission(comment):
                         comment.save() # avoids to comment it again
                         myanswer = comment.reply(txt)
                         print("OMG I commented! ", myanswer)
+                        source_simplified = '?'
+                        if 'Wiktionnaire' in source:
+                            source_simplified = 'wiktionnaire'
+                        elif 'Wikipedia' in source:
+                            source_simplified = 'wikipedia'
+                        elif 'Urban Dictionary' in source:
+                            source_simplified = 'urban dictionary'
+                        
+                        remember_I_contributed(comment.subreddit.display_name, comment.submission.id, comment.id, myanswer.id, token.text, source_simplified, myanswer.permalink)
                         break
                     except praw.exceptions.APIException as e:
                         if not 'RATELIMIT' in str(e):
@@ -437,25 +465,37 @@ def parse_comment(comment):
     if isinstance(comment, MoreComments):
         print(':', end='')            
         return
-    # skip if moderated
-    if comment.locked or comment.archived or comment.collapsed or (comment.banned_by is not None):
+    
+    # do not explore any message we already contributed to
+    if already_contributed_submission(comment.link_id):
+        print('x',end='')
         return
-    # skip all the comments which are downvoted
-    if comment.score < 0:
-        return
-    # skip if too old
-    age_days = int((utc_timestamp - comment.created_utc)/60/60/24)
-    #print('age of the comment:',int((utc_timestamp - comment.created_utc)/60/60/24),'days')
-    if age_days > 10:
-        print(',', end='')
-    elif comment.saved or (comment.author is not None and comment.author.name == myusername):
-        # we probably worked on it already!
-        return
+
+    # only parse the comment if I never did it in the past
+    if alread_parsed_comment(comment.id):
+        print('x',end='')
     else:
-        stats['comments parsed'] = stats['comments parsed'] + 1
-        if find_definitions_in_submission(comment):
-            return True
+        remember_I_parsed_comment(comment.id)
         
+        # skip if moderated
+        if comment.locked or comment.archived or comment.collapsed or (comment.banned_by is not None):
+            return
+        # skip all the comments which are downvoted
+        if comment.score < 0:
+            return
+        # skip if too old
+        age_days = int((utc_timestamp - comment.created_utc)/60/60/24)
+        #print('age of the comment:',int((utc_timestamp - comment.created_utc)/60/60/24),'days')
+        if age_days > 10:
+            print(',', end='')
+        elif comment.saved or (comment.author is not None and comment.author.name == myusername):
+            # we probably worked on it already!
+            return
+        else:
+            stats['comments parsed'] = stats['comments parsed'] + 1
+            if find_definitions_in_submission(comment):
+                return True
+            
     # now explore the subcomments!
     for reply in comment.replies:    
         if isinstance(reply, MoreComments):
@@ -475,6 +515,9 @@ def process_submission(submission):
     global i
     
     if submission.locked or submission.hidden or submission.quarantine or submission.num_comments==0:
+        return
+    
+    if already_contributed_submission(submission.id):
         return
     
     print("\nr/",submission.subreddit.display_name , " > ", submission.title,' (',submission.num_comments,' comments)',sep='')
@@ -500,7 +543,7 @@ def process_submission(submission):
 if __name__ == "__main__":
     i=0
     print('\nprocessing hot threads\n\n')
-    for submission in subreddit.hot(limit=500):
+    for submission in subreddit.hot(limit=1000): # rising #hot
         process_submission(submission)
     
     print('\n\n', stats,'\n\nprocessing comments\n\n')
@@ -512,4 +555,10 @@ if __name__ == "__main__":
         if i%100 == 0:
             print('\n',stats,'\n')
      
+
+# ne pas pas alors qu'aurait pu 
+# 
+# ancillaire: count for yahoo: 14800
+
+
 

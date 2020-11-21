@@ -2,6 +2,8 @@ import sqlite3
 import json
 from urllib.parse import quote
 
+import wordfreq
+
 from stats import *
 
 from usedb import *
@@ -293,10 +295,17 @@ def search_word_wiktionnaire(comment, word):
 
     stats['words found wiktionnaire'] = stats['words found wiktionnaire'] + 1
     print('\t',json.dumps(info, sort_keys=True, indent=4))
-
+    
+    # if the definition redirects to another terms which is obviously too frequent 
+    if info['redirection'] is not None:
+        zf = wordfreq.zipf_frequency(info['redirection'],'fr')
+        if zf >= 2:
+            print('\tdefinition of',word,'in Wiktionnaire redirects to',info['redirection'],'which is frequent in french, with zipf=',zf)
+            return (True, None, None)
+            
     # if the definition is too short, reject
     # if a defintion is in ébauche, reject
-    if len(info['bloc_definition']) <= 150 or info['bloc_definition'].count('ébauche-déf') > 0:
+    if len(info['bloc_definition']) <= 100 or info['bloc_definition'].count('ébauche-déf') > 0:
         return (False, None, None)        
 
     # if too many definitions, blacklist (too much uncertainty)

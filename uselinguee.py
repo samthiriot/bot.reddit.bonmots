@@ -13,6 +13,7 @@ stats['words searched linguee'] = 0
 
 cache_linguee_html = LRU(500)
 
+# TODO throttling
 def fetch_html_linguee(word):
     global cache_linguee_html
     global stats
