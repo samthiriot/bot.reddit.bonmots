@@ -337,7 +337,7 @@ def find_definitions_in_submission(comment):
         
         count_yahoo = search_word_yahoo(token.lemma_, token.text)
         print('\tcount for yahoo:',count_yahoo)
-        if count_yahoo >= 8000:
+        if count_yahoo >= 13000:
             print('\tword frequent in Yahoo')
             # TODO add stat
             add_word_rejected_db(token.lemma_, "more than 8000 Yahoo results")
@@ -463,17 +463,17 @@ def parse_comment(comment):
     global myusername
     global stats
     if isinstance(comment, MoreComments):
-        print(':', end='')            
+        print(':', end='', flush=True)            
         return
     
     # do not explore any message we already contributed to
     if already_contributed_submission(comment.link_id):
-        print('x',end='')
+        print('x',end='', flush=True)
         return
 
     # only parse the comment if I never did it in the past
     if alread_parsed_comment(comment.id):
-        print('x',end='')
+        print('x',end='', flush=True)
     else:
         remember_I_parsed_comment(comment.id)
         
@@ -543,7 +543,7 @@ def process_submission(submission):
 if __name__ == "__main__":
     i=0
     print('\nprocessing hot threads\n\n')
-    for submission in subreddit.hot(limit=1000): # rising #hot
+    for submission in subreddit.rising(limit=1000): # rising #hot
         process_submission(submission)
     
     print('\n\n', stats,'\n\nprocessing comments\n\n')
