@@ -294,7 +294,11 @@ def find_definitions_in_submission(comment):
         if reason is not None:
             stats['words rejected db'] = stats['words rejected db'] + 1
             continue
-
+        
+        # we already contributed this word (TODO add recently)
+        if already_contributed_word(token.text, token.lemma_):
+	        continue
+        
         # pass names
         if token.tag_ == 'PERSON' or token.tag_.startswith('PROPN'):
             stats['words rejected names'] = stats['words rejected names'] + 1
@@ -318,7 +322,18 @@ def find_definitions_in_submission(comment):
             stats['words rejected frequency'] = stats['words rejected frequency'] + 1
             add_word_rejected_db(token.lemma_, "en zipf frequency > 1.5")
             continue
-
+        
+        # ignorons les termes qui, n-1 accolé au précédent, forment un mot différent
+        token_prev = token.nbor(-1) if token.i >= 1 else None       
+        if token_prev is not None and token_prev.is_alpha and not token_prev.is_space and not token_prev.like_url:
+            # search for concatenations
+            # ex: maybe we look at "datage" which is rare
+            # but maybe post-datage is common?
+            print('\t?',token_prev.text+'-'+token.text)
+            if wordfreq.zipf_frequency(token_prev.text+'-'+token.text,'fr') > 1.5 or wordfreq.zipf_frequency(token_prev.text+token.text,'fr'):
+                print('\t'+token_prev.text+'-'+token.text+' is frequent', sep='')
+                continue
+        
         print('\n')
         # ignorons les termes fréquents sur reddit
         count_reddit = reddit_results_highter_than(token.lemma_, 10)
@@ -338,7 +353,6 @@ def find_definitions_in_submission(comment):
         count_yahoo = search_word_yahoo(token.lemma_, token.text)
         print('\tcount for yahoo:',count_yahoo)
         if count_yahoo >= 13000:
-            print('\tword frequent in Yahoo')
             # TODO add stat
             add_word_rejected_db(token.lemma_, "more than 8000 Yahoo results")
             continue
@@ -363,7 +377,7 @@ def find_definitions_in_submission(comment):
             (blocksearch, explanation, source) = search_wikipedia(token.text)
         if not blocksearch and explanation is None and token.text.lower() != token.lemma_.lower():
             (blocksearch, explanation, source) = search_wikipedia(token.lemma_)
-
+        
         
         # search Urban Dictionary
         if not blocksearch and explanation is None:
@@ -449,7 +463,7 @@ def find_definitions_in_submission(comment):
         # do not search too much on one given post
         if nbsearched > 20:
              break
-
+    
     # we did not commented anything
     return False
 
@@ -470,7 +484,7 @@ def parse_comment(comment):
     if already_contributed_submission(comment.link_id):
         print('x',end='', flush=True)
         return
-
+    
     # only parse the comment if I never did it in the past
     if alread_parsed_comment(comment.id):
         print('x',end='', flush=True)

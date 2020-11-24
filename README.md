@@ -29,12 +29,14 @@ Chaque mot peut ensuite être rejeté si:
 * le mot fait partie d'une liste noire développée manuellement pour supprimer les termes propres aux forums (par ex: upvote, downvote, crosspost) 
 * le mot est fréquent dans les corpus francophones ou anglophones, c'est-à-dire qu'il a un [rang-fréquence de Zipf](https://fr.wikipedia.org/wiki/Loi_de_Zipf) supérieur à 1.5 (implémenté avec le paquet [wordfreq](https://pypi.org/project/wordfreq/) )
 * une variation de diacritiques ("mecanicien", "mécanicien", "mecanicién") et/ou de doublements de consonnes ("trape", "trappe") conduit à un rang-fréquence de Zipf supérieur à 1.5 
+* le mode accolé au mot précédent est fréquent: par exemple "datage" est rare, mais accolé à son prédécesseur, "post-datage" doit être rejeté car fréquent
 * le mot est trouvé dans le [Wiktionnaire](https://fr.wiktionary.org/) et 
   * a au moins 5 définitions, ce qui l'identifie commme [polysémique](https://fr.wikipedia.org/wiki/Polys%C3%A9mie) donc difficile à définir de façon pertinente
   * a au moins une définition injurieuse ou raciste
   * est défini comme un sigle
 * le mot est trouvé plus de 5 fois sur les reddits [r/france](https://www.reddit.com/r/france/), [r/europe](https://www.reddit.com/r/europe/) ou [r/news](https://www.reddit.com/r/news/), ce qui l'identifie comme un terme d'usage contemporain courant (par exemple "COVID" ne fait pas partie des corpus linguistiques mais ne doit pas être défini)
 * le mot est trouvé plus de 5 fois sur [Linguee](https://www.linguee.com/)
+* le mot est trouvé plus de 15000 fois sur [Yahoo Search France](https://fr.search.yahoo.com/)
 * le mot est trouvé sur [Wikipedia](https://fr.wikipedia.org/):
   * mais redirige vers un mot dont la fréquence linguistique est élevée ([rang-fréquence de Zipf](https://fr.wikipedia.org/wiki/Loi_de_Zipf) supérieur à 1.5)
   * mais est associé à une catégorie en liste noire, dont: page en ébauche; page controversée; page portant sur des produits informatiques
